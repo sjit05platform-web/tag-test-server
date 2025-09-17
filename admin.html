@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <!-- ===== 기본 인증 가드 ===== -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    html.auth-check { visibility:hidden }
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    body{font-family:ui-sans-serif,system-ui}
+  </style>
+
+  <script>
+    // === 페이지 공통 설정 ===
+    window.__LOGIN_PAGE__ = 'login.html';   // 미인증/만료시 이동
+    window.__FORBIDDEN__  = '403.html';     // 권한 없음시 이동(없으면 alert로 대체됨)
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft',   // 바꿔주세요
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota'  // 바꿔주세요
+    };
+
+    // === API 엔드포인트(예시) ===
+    window.__API__ = {
+      groups:      'https://example.execute-api.ap-northeast-2.amazonaws.com/prod/groups',
+      user_roles:  'https://example.execute-api.ap-northeast-2.amazonaws.com/prod/user-roles',
+      devices:     'https://example.execute-api.ap-northeast-2.amazonaws.com/prod/devices'
+    };
+  </script>
+
+  <!-- Cognito SDK -->
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>tailwind.config={theme:{extend:{colors:{primary:'#1E88E5'}}}}</script>
+
+  <title>관리자 콘솔</title>
+</head>
+<body class="h-screen bg-gray-50 auth-check">
+  <!-- 헤더 -->
+  <header class="h-12 bg-white border-b border-gray-200 flex items-center justify-between px-4">
+    <div class="text-sm"><b>관리자 콘솔</b></div>
+    <div id="whoami" class="text-xs text-gray-500"></div>
+  </header>
+
+  <!-- 메인 -->
+  <main class="p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+    <!-- A. 그룹 트리 -->
+    <section class="bg-white border rounded-lg p-4">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold">그룹 트리</h2>
+        <button id="btnReloadTree" class="text-xs px-2 py-1 border rounded">새로고침</button>
+      </div>
+
+      <div id="tree" class="mt-3 text-sm"></div>
+
+      <div class="mt-4 border-t pt-3">
+        <div class="text-sm font-medium mb-2">그룹 생성</div>
+        <div class="grid gap-2">
+          <input id="newGroupName" class="border rounded px-2 py-1.5" placeholder="표시 이름 (예: 팀1/팀장1/사원1)">
+          <input id="parentGroupId" class="border rounded px-2 py-1.5" placeholder="부모 group_id (루트면 비움)">
+          <button id="btnCreateGroup" class="px-3 py-1.5 bg-primary text-white rounded">생성</button>
+          <div class="text-[12px] text-gray-500">* group_id는 서버에서 생성/정규화. parent_group_id만 정확히.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- B. 사용자 역할 부여/해지 -->
+    <section class="bg-white border rounded-lg p-4">
+      <h2 class="font-semibold">사용자 역할</h2>
+      <div class="mt-3 grid gap-2">
+        <input id="urUser"  class="border rounded px-2 py-1.5" placeholder="user_id (Cognito sub 또는 email)">
+        <input id="urGroup" class="border rounded px-2 py-1.5" placeholder="group_id (예: team1, workerA)">
+        <select id="urRole" class="border rounded px-2 py-1.5">
+          <option value="viewer">viewer(조회)</option>
+          <option value="operator">operator(운영)</option>
+          <option value="manager">manager(관리)</option>
+          <option value="admin">admin(전권; 루트/특수)</option>
+        </select>
+        <div class="flex gap-2">
+          <button id="btnGrant" class="px-3 py-1.5 bg-primary text-white rounded">부여</button>
+          <button id="btnRevoke" class="px-3 py-1.5 border rounded">해지</button>
+          <button id="btnListRoles" class="px-3 py-1.5 border rounded">사용자 권한 조회</button>
+        </div>
+      </div>
+
+      <table class="w-full text-sm mt-3">
+        <thead class="bg-gray-50">
+          <tr><th class="p-2 text-left">group_id</th><th class="p-2 text-left">role</th></tr>
+        </thead>
+        <tbody id="rolesBody" class="divide-y"></tbody>
+      </table>
+    </section>
+
+    <!-- C. 디바이스 관리 -->
+    <section class="bg-white border rounded-lg p-4">
+      <h2 class="font-semibold">디바이스</h2>
+
+      <div class="mt-3 grid gap-2">
+        <input id="devGroup" class="border rounded px-2 py-1.5" placeholder="대상 group_id (예: team1)">
+        <div class="flex gap-2">
+          <button id="btnListDevices" class="px-3 py-1.5 border rounded">그룹 디바이스 조회</button>
+          <button id="btnListAllDevices" class="px-3 py-1.5 border rounded">전체(관리자)</button>
+        </div>
+      </div>
+
+      <table class="w-full text-sm mt-3">
+        <thead class="bg-gray-50">
+          <tr><th class="p-2 text-left">device_id</th><th class="p-2 text-left">group_id</th><th class="p-2"></th></tr>
+        </thead>
+        <tbody id="devBody" class="divide-y"></tbody>
+      </table>
+
+      <div class="mt-4 border-t pt-3">
+        <div class="font-medium mb-2">등록/이동/삭제</div>
+        <div class="grid gap-2">
+          <input id="devId" class="border rounded px-2 py-1.5 mono" placeholder="device_id (예: MAC 정규화)">
+          <input id="devToGroup" class="border rounded px-2 py-1.5" placeholder="목표 group_id">
+          <div class="flex gap-2">
+            <button id="btnAttach" class="px-3 py-1.5 bg-primary text-white rounded">등록/이동</button>
+            <button id="btnDeleteDev" class="px-3 py-1.5 border rounded">삭제</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ===== JS 로직 ===== -->
+  <script>
+    // === 상태 ===
+    let ID_TOKEN = '', ACCESS_TOKEN = '', USER_EMAIL = '', COGNITO_GROUPS = [];
+
+    // === 유틸 ===
+    function b64decodeSegment(seg){ return JSON.parse(atob(seg.replace(/-/g,'+').replace(/_/g,'/'))); }
+    function setMsg(el, txt){ el.textContent = txt; setTimeout(()=> el.textContent='', 1500); }
+    function row(html){ const tr=document.createElement('tr'); tr.innerHTML=html; return tr; }
+
+    // === Cognito 세션/토큰 확보 + admin 차단 ===
+    (function authGuard(){
+      document.documentElement.classList.add('auth-check');
+
+      function goLogin(){
+        const u=new URL(window.__LOGIN_PAGE__,location.href);
+        u.searchParams.set('redirect', location.href);
+        location.replace(u.toString());
+      }
+      function goForbidden(){
+        if (window.__FORBIDDEN__) location.replace(new URL(window.__FORBIDDEN__, location.href));
+        else { alert('접근 권한이 없습니다(admin 전용).'); goLogin(); }
+      }
+
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity) return setTimeout(waitLib, 20);
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          const user = pool.getCurrentUser(); if (!user) return goLogin();
+          user.getSession((err, session)=>{
+            if (err || !session || !session.isValid()) return goLogin();
+
+            // tokens
+            ID_TOKEN = session.getIdToken().getJwtToken();
+            ACCESS_TOKEN = session.getAccessToken().getJwtToken();
+            const claims = b64decodeSegment(ID_TOKEN.split('.')[1]);
+            USER_EMAIL = claims.email || user.getUsername() || '';
+            COGNITO_GROUPS = claims['cognito:groups'] || [];
+
+            // admin 판정
+            const isAdmin = Array.isArray(COGNITO_GROUPS) && COGNITO_GROUPS.includes('admin');
+            try { sessionStorage.setItem('app_is_admin', isAdmin ? '1':'0'); } catch {}
+
+            if (!isAdmin) return goForbidden();
+
+            // 화면 표시
+            document.getElementById('whoami').textContent = USER_EMAIL + ' (admin)';
+            document.documentElement.classList.remove('auth-check');
+
+            // 초기 데이터
+            loadTree();
+          });
+        }catch(e){ console.error(e); goLogin(); }
+      })();
+    })();
+
+    // === 공통 fetch (토큰 자동 첨부) ===
+    async function api(url, opts={}){
+      const headers = Object.assign({'Content-Type':'application/json'}, opts.headers||{}, {
+        'Authorization': 'Bearer ' + ID_TOKEN   // 필요시 ACCESS_TOKEN으로 교체
+      });
+      const res = await fetch(url, Object.assign({}, opts, {headers}));
+      const text = await res.text();
+      let data = {}; try{ data = JSON.parse(text); }catch{}
+      if (!res.ok) throw Object.assign(new Error('HTTP '+res.status), {status:res.status, data});
+      return data;
+    }
+
+    // ===== A. 그룹 트리 =====
+    const $tree = document.getElementById('tree');
+    const $btnReloadTree = document.getElementById('btnReloadTree');
+    async function loadTree(){
+      $tree.innerHTML = '<div class="text-xs text-gray-500">불러오는 중…</div>';
+      try{
+        // GET /groups?format=tree  (서버에서 트리로 가공해서 내려주는 것을 권장)
+        const data = await api(window.__API__.groups + '?format=tree');
+        $tree.innerHTML = renderTree(data);
+      }catch(e){
+        console.error(e);
+        $tree.innerHTML = '<div class="text-xs text-red-600">트리를 불러오지 못했습니다.</div>';
+      }
+    }
+    function renderTree(node){
+      if (!node) return '';
+      // node = { id, name, children:[...] }
+      const li = (n) => `
+        <li class="ml-3">
+          <div class="py-0.5"><span class="px-1.5 py-0.5 bg-gray-100 rounded">${(n.name||n.id)}</span>
+            <span class="text-[11px] text-gray-500 ml-1">id: ${n.id}</span>
+          </div>
+          ${n.children && n.children.length ? `<ul class="ml-3 border-l border-gray-200 pl-2">${n.children.map(li).join('')}</ul>` : ''}
+        </li>`;
+      return `<ul>${li(node)}</ul>`;
+    }
+    $btnReloadTree.onclick = loadTree;
+
+    // 그룹 생성
+    document.getElementById('btnCreateGroup').onclick = async ()=>{
+      const name = document.getElementById('newGroupName').value.trim();
+      const parent = document.getElementById('parentGroupId').value.trim() || null;
+      if (!name){ alert('그룹 표시 이름을 입력하세요.'); return; }
+      try{
+        await api(window.__API__.groups, {method:'POST', body:JSON.stringify({ name, parent_group_id: parent })});
+        document.getElementById('newGroupName').value='';
+        document.getElementById('parentGroupId').value='';
+        loadTree();
+      }catch(e){ alert('그룹 생성 실패: '+(e.data?.message||e.message)); }
+    };
+
+    // ===== B. 사용자 역할 =====
+    const $rolesBody = document.getElementById('rolesBody');
+
+    document.getElementById('btnGrant').onclick = async ()=>{
+      const user = document.getElementById('urUser').value.trim();
+      const gid  = document.getElementById('urGroup').value.trim();
+      const role = document.getElementById('urRole').value;
+      if (!user||!gid){ alert('user_id, group_id를 입력하세요.'); return; }
+      try{
+        await api(window.__API__.user_roles, {method:'POST', body:JSON.stringify({ user_id:user, group_id:gid, role })});
+        listRoles();
+      }catch(e){ alert('부여 실패: '+(e.data?.message||e.message)); }
+    };
+
+    document.getElementById('btnRevoke').onclick = async ()=>{
+      const user = document.getElementById('urUser').value.trim();
+      const gid  = document.getElementById('urGroup').value.trim();
+      if (!user||!gid){ alert('user_id, group_id를 입력하세요.'); return; }
+      try{
+        await api(window.__API__.user_roles, {method:'DELETE', body:JSON.stringify({ user_id:user, group_id:gid })});
+        listRoles();
+      }catch(e){ alert('해지 실패: '+(e.data?.message||e.message)); }
+    };
+
+    document.getElementById('btnListRoles').onclick = listRoles;
+    async function listRoles(){
+      const user = document.getElementById('urUser').value.trim();
+      if (!user){ alert('user_id를 입력하세요.'); return; }
+      try{
+        const data = await api(window.__API__.user_roles + '?user_id=' + encodeURIComponent(user));
+        // data = [{group_id, role}, ...]
+        $rolesBody.innerHTML = '';
+        (data||[]).forEach(r=>{
+          $rolesBody.appendChild(row(`<td class="p-2">${r.group_id}</td><td class="p-2">${r.role}</td>`));
+        });
+      }catch(e){
+        $rolesBody.innerHTML = '<tr><td class="p-2 text-red-600" colspan="2">조회 실패</td></tr>';
+      }
+    }
+
+    // ===== C. 디바이스 =====
+    const $devBody = document.getElementById('devBody');
+
+    document.getElementById('btnListDevices').onclick = async ()=>{
+      const gid = document.getElementById('devGroup').value.trim();
+      if (!gid){ alert('group_id를 입력하세요.'); return; }
+      try{
+        const data = await api(window.__API__.devices + '?group_id=' + encodeURIComponent(gid));
+        renderDevices(data);
+      }catch(e){ alert('조회 실패: '+(e.data?.message||e.message)); }
+    };
+
+    document.getElementById('btnListAllDevices').onclick = async ()=>{
+      try{
+        const data = await api(window.__API__.devices + '?scope=all'); // 서버에서 admin만 허용
+        renderDevices(data);
+      }catch(e){ alert('조회 실패: '+(e.data?.message||e.message)); }
+    };
+
+    function renderDevices(list){
+      $devBody.innerHTML='';
+      (list||[]).forEach(d=>{
+        $devBody.appendChild(row(`
+          <td class="p-2 mono">${d.device_id}</td>
+          <td class="p-2">${d.group_id}</td>
+          <td class="p-2 text-right">
+            <button class="px-2 py-0.5 text-xs border rounded" data-id="${d.device_id}" onclick="prefillMove('${d.device_id}','${d.group_id}')">이동</button>
+          </td>
+        `));
+      });
+    }
+
+    window.prefillMove = (id, gid)=>{
+      document.getElementById('devId').value = id;
+      document.getElementById('devToGroup').value = gid;
+    };
+
+    document.getElementById('btnAttach').onclick = async ()=>{
+      const id  = document.getElementById('devId').value.trim();
+      const gid = document.getElementById('devToGroup').value.trim();
+      if (!id||!gid){ alert('device_id, 목표 group_id를 입력하세요.'); return; }
+      try{
+        await api(window.__API__.devices, {method:'POST', body:JSON.stringify({ device_id:id, group_id:gid })}); // 신규 또는 이동 upsert
+        alert('완료');
+      }catch(e){ alert('등록/이동 실패: '+(e.data?.message||e.message)); }
+    };
+
+    document.getElementById('btnDeleteDev').onclick = async ()=>{
+      const id  = document.getElementById('devId').value.trim();
+      if (!id){ alert('device_id를 입력하세요.'); return; }
+      if (!confirm(id+' 삭제할까요?')) return;
+      try{
+        await api(window.__API__.devices, {method:'DELETE', body:JSON.stringify({ device_id:id })});
+        alert('삭제 완료');
+      }catch(e){ alert('삭제 실패: '+(e.data?.message||e.message)); }
+    };
+  </script>
+</body>
+</html>

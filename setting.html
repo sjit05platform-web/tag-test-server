@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <style> html.auth-check { visibility: hidden } </style>
+  <style>
+  /* 전광판 페이드인 */
+  #hdr-rotator{ position:relative; min-height:24px; }
+  #hdr-rotator .rot-line{
+    position:absolute; inset:0;
+    opacity:0; transform:translateY(8px);
+    transition:opacity .4s ease, transform .4s ease;
+    will-change:opacity,transform;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #hdr-rotator .rot-line.show{
+    opacity:1; transform:translateY(0);
+  }
+</style>
+
+  <script>
+    // 인증 가드 공통 프리셋
+    document.documentElement.classList.add('auth-check');
+    window.__LOGIN_PAGE__ = 'login.html';
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft',
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota',
+    };
+
+    // ★ API 엔드포인트 단일 정의(여기만 수정)
+    window.__API__ = {
+      API_BASE: "https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev",
+      COLLECTION_PATH: "calculated_locations",
+      WS_URL: "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev",
+      ALLOWED_API: "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed",
+      REGISTER_API: "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag",
+      // ▼ 계정 트리 조회 API (배포 경로와 정확히 일치시키세요)
+      ACCOUNTS_API: "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/get-forest-tag"
+      // 필요시: get_forest_tag 로 교체
+    };
+  </script>
+
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <script>
+    // ===== 인증 가드 =====
+    (function authGuard() {
+      function goLogin() {
+        const u = new URL(window.__LOGIN_PAGE__, location.href);
+        u.searchParams.set('redirect', location.href);
+        location.replace(u.toString());
+      }
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity){ return setTimeout(waitLib, 20); }
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          if (!sessionStorage.getItem('app_session')) {
+            const u = pool.getCurrentUser();
+            if (u) { try { u.signOut(); } catch(e){} }
+            return goLogin();
+          }
+          const user = pool.getCurrentUser();
+          if (!user) return goLogin();
+          user.getSession(function(err, session){
+            if (err || !session || !session.isValid()) return goLogin();
+            try {
+              const groups = (session.getIdToken().payload || {})['cognito:groups'] || [];
+              sessionStorage.setItem('app_is_admin', groups.includes('admin') ? '1' : '0');
+            } catch {}
+            document.documentElement.classList.remove('auth-check');
+            user.getUserAttributes(function(e, attrs){
+              let email = (typeof user.getUsername === 'function') ? user.getUsername() : '';
+              if (!e && Array.isArray(attrs)) {
+                const em = attrs.find(a => (a.getName && a.getName()==='email') || a?.Name==='email');
+                if (em) email = (em.getValue ? em.getValue() : em.Value);
+              }
+              try { sessionStorage.setItem('app_user_email', email); } catch {}
+              try { window.__showSidebarGreet && window.__showSidebarGreet(email); } catch {}
+              try {
+                const addBtn = document.getElementById('addBtn');
+                if (addBtn) addBtn.disabled = !email;
+              } catch {}
+            });
+          });
+        }catch(e){ goLogin(); }
+      })();
+    })();
+  </script>
+
+  <meta name="viewport" content="width=device-width,  initial-scale=1.0"/>
+  <title>Tag Monitor</title>
+
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { primary:'#1E88E5', secondary:'#F5F6FA' },
+          borderRadius: {
+            'none':'0px','sm':'4px', DEFAULT:'8px','md':'12px','lg':'16px',
+            'xl':'20px','2xl':'24px','3xl':'32px','full':'9999px','button':'8px'
+          }
+        }
+      }
+    }
+  </script>
+
+  <link rel="stylesheet" href="./ui-common.css" />
+
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc}
+    .mono{font-family:'Roboto Mono',monospace}
+  </style>
+
+  <!-- ✅ 계정 트리 라인 스타일 (추가) -->
+  <style id="acct-tree-lines-css">
+    #acct-tree ul.tree-ul{ list-style:none; margin:0; padding-left:22px; position:relative; }
+    #acct-tree ul.tree-ul:before{ content:""; position:absolute; left:10px; top:0; bottom:0; border-left:1px solid #e5e7eb; }
+    #acct-tree li.tree-li{ position:relative; }
+    #acct-tree li.tree-li:before{ content:""; position:absolute; left:-12px; top:16px; width:22px; border-top:1px solid #e5e7eb; }
+  </style>
+</head>
+
+<body>
+  <div class="sj-shell">
+    <aside class="sj-sidebar" data-sj-sidebar></aside>
+
+    <main class="sj-main">
+      <header class="sj-header">
+        <div class="sj-title text-sm"></div>
+        <div data-sj-rotator id="hdr-rotator" class="w-[240px] sm:w-[320px] md:w-[480px]"></div>
+      </header>
+
+      <section class="p-6 max-w-3xl mx-auto">
+        <!-- ✅ 태그 관리 -->
+        <h2 class="text-xl font-bold mb-4">태그 관리</h2>
+        <div class="bg-white rounded-lg border shadow-sm p-4 mb-6">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label class="text-xs text-gray-500">태그 이름</label>
+              <input id="tagName" type="text" class="w-full mt-1 border rounded px-2 py-1.5" placeholder="예) 냉장고 센서">
+            </div>
+            <div class="sm:col-span-2">
+              <label class="text-xs text-gray-500">태그 ID</label>
+              <input id="tagId" type="text" class="w-full mt-1 border rounded px-2 py-1.5 mono" placeholder="예) BC:10:2F:9F:DA:40">
+            </div>
+          </div>
+          <div class="mt-3 flex items-center gap-2">
+            <button id="addBtn" class="px-3 py-1.5 bg-primary text-white rounded" disabled>추가</button>
+            <span id="msg" class="text-xs text-gray-500"></span>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-lg border shadow-sm mb-8">
+          <div class="px-4 py-3 border-b flex items-center justify-between">
+            <div class="text-sm font-medium text-gray-700">태그</div>
+            <div class="flex items-center gap-2 text-xs">
+              <button id="exportBtn" class="px-2 py-1 border rounded bg-white hover:bg-gray-50">내보내기</button>
+              <label class="px-2 py-1 border rounded bg-white hover:bg-gray-50 cursor-pointer">
+                불러오기(JSON)
+                <input id="importFile" type="file" accept="application/json" class="hidden">
+              </label>
+              <button id="clearBtn" class="px-2 py-1 border rounded bg-white hover:bg-gray-50">모두 삭제</button>
+            </div>
+          </div>
+          <div id="tagTableWrap" class="relative">
+            <table class="min-w-full text-sm">
+              <thead class="bg-gray-50 sticky top-0 z-10">
+                <tr class="text-gray-600">
+                  <th class="px-3 py-2 text-left">태그 이름</th>
+                  <th class="px-3 py-2 text-left">태그 ID</th>
+                  <th class="px-3 py-2 text-left">소유자</th>
+                  <th class="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody id="listBody" class="divide-y divide-gray-100"></tbody>
+            </table>
+          </div>
+          <div id="empty" class="p-6 text-center text-gray-500">등록된 태그가 없습니다.</div>
+        </div>
+
+        <!-- ✅ 유저 관리 -->
+        <section id="admin-users-wrap" class="hidden">
+          <h2 class="text-xl font-bold mb-4">유저 관리</h2>
+          <section id="admin-users" class="bg-white border rounded-lg shadow-sm p-4 mb-6">
+            <div class="flex items-center justify-between">
+              <div class="text-sm font-bold">태그 보유 사용자 목록</div>
+              <div class="text-xs text-gray-500">
+                <button id="userRefresh" class="px-2 py-1 border rounded bg-white hover:bg-gray-50">새로고침</button>
+              </div>
+            </div>
+
+            <div class="mt-3">
+              <div id="userTableWrap" class="relative">
+                <table class="min-w-full text-sm">
+                  <thead class="bg-gray-50 sticky top-0 z-10">
+                    <tr class="text-gray-600">
+                      <th class="px-3 py-2 text-left">User ID</th>
+                      <th class="px-3 py-2 text-right">태그수</th>
+                      <th class="px-3 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="userList" class="divide-y divide-gray-100"></tbody>
+                </table>
+              </div>
+              <div id="userEmpty" class="p-4 text-center text-gray-500">표시할 계정이 없습니다.</div>
+            </div>
+
+            <div class="mt-4 border-t pt-3">
+              <div class="text-xs text-gray-600 mb-1">직접 삭제(태그 없는 계정 포함):</div>
+              <div class="flex gap-2">
+                <input id="manualAccountId" class="flex-1 border rounded px-2 py-1.5" placeholder="User ID">
+                <button id="manualDelete" class="px-3 py-1.5 border rounded bg-white hover:bg-gray-50">삭제</button>
+              </div>
+            </div>
+          </section>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- 공통 UI (로테이터 포함) -->
+  <script type="module" src="./ui-common.js"></script>
+
+  <!-- SJUI 로테이터 강제 마운트(타이밍 이슈 방지) -->
+  <script>
+    (function waitAndMountRotator(){
+      if (!window.SJUI) return setTimeout(waitAndMountRotator, 20);
+      try { window.SJUI.mountRotators && window.SJUI.mountRotators(); } catch {}
+    })();
+  </script>
+
+  <!-- ✅ 전광판 + 허용목록 + REST + WS : 단일 모듈 (기존 유지) -->
+  <script type="module">
+    import {
+      buildTickerTextsFromDevices,
+      publishAlerts,
+      subscribeTickerFromOthers,
+      macPretty
+    } from './ticker-common.js';
+
+    const { API_BASE, COLLECTION_PATH, WS_URL, ALLOWED_API: ALLOWED_URL } = window.__API__;
+    const ACTIVE_MS = 60 * 1000;
+
+    // ===== util =====
+    const toNum = (v) => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+    function macHex12(raw){
+      const s = String(raw||'').toUpperCase().replace(/[^0-9A-F]/g,'');
+      return /^[0-9A-F]{12}$/.test(s) ? s : null;
+    }
+    function macDisplay(rawOrKey){
+      const k = macHex12(rawOrKey);
+      return k ? k.match(/.{2}/g).join(':') : String(rawOrKey||'');
+    }
+    function pickTs(x){
+      let t = toNum(x.timestamp ?? x.ts ?? x.timestamp_epoch ?? x.raw_time ?? x.time);
+      if (t==null) return null;
+      return (t < 1e12) ? t*1000 : t;
+    }
+    function currentEmail(){ try { return sessionStorage.getItem('app_user_email') || ''; } catch { return ''; } }
+    async function getIdToken(){
+      return new Promise(resolve=>{
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          const u = pool.getCurrentUser();
+          if (!u) return resolve('');
+          u.getSession((err,s)=>{ if(err||!s||!s.isValid()) return resolve(''); resolve(s.getIdToken().getJwtToken());});
+        }catch{ resolve(''); }
+      });
+    }
+    const IS_ADMIN = (()=>{ try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; } })();
+
+    // ===== 전광판 상태 =====
+    const devices = new Map();
+    let knownIds = [];
+    window.devices  = devices;
+    window.knownIds = knownIds;
+
+    const allowedSet = new Set();
+
+    subscribeTickerFromOthers();
+
+    // === 헤더 로테이터 ===
+    let rotTimer=null, rotIdx=0, rotLines=[];
+    function setHeaderLines(lines){
+      rotLines = Array.isArray(lines) && lines.length ? lines.slice() : ['데이터 수신 대기 중…'];
+      rotIdx = 0;
+      playHeaderRotator(true);
+    }
+    function playHeaderRotator(reset){
+      const host = document.getElementById('hdr-rotator');
+      if (!host) return;
+      if (reset && rotTimer){ clearTimeout(rotTimer); rotTimer=null; }
+      const text = rotLines[rotIdx % rotLines.length];
+      rotIdx++;
+      const el = document.createElement('div');
+      el.className = 'rot-line';
+      el.textContent = text;
+      host.appendChild(el);
+      requestAnimationFrame(()=> el.classList.add('show'));
+      const prev = host.querySelectorAll('.rot-line');
+      if (prev.length > 1){
+        prev[0].classList.remove('show');
+        setTimeout(()=> prev[0]?.remove(), 400);
+      }
+      rotTimer = setTimeout(()=> playHeaderRotator(false), 1200);
+    }
+
+    function updateTicker() {
+      const texts = buildTickerTextsFromDevices({
+        devicesMap: window.devices ?? new Map(),
+        ids:        window.knownIds ?? [],
+        activeMs:   60_000,
+      });
+
+      publishAlerts(
+        texts.map(t => ({ text: t, level: 'info' })),
+        { mode:'replace', staggerMs:1200, broadcast:true }
+      );
+    }
+
+    window.updateTicker = updateTicker;
+
+    async function fetchAllowedTagIdsFromServer(){
+      const me = currentEmail();
+      if (!me) return [];
+      const token = await getIdToken();
+      const url = new URL(ALLOWED_URL);
+      url.searchParams.set('user_id', me);
+      url.searchParams.set('scope', IS_ADMIN ? 'all' : 'descendants');
+      url.searchParams.set('include_owner', '1');
+
+      try{
+        const res = await fetch(url.toString(), {
+          method: 'GET',
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+          mode: 'cors'
+        });
+        const data = await res.json().catch(()=> ({}));
+        if (!res.ok || !data || !Array.isArray(data.tags)) return [];
+        const ids = [];
+        for (const t of data.tags){
+          const raw = (typeof t==='string') ? t : (t.tag_mac || t.id || t.mac || t.tagMac || '');
+          const k = macHex12(raw);
+          if (k) ids.push(k);
+        }
+        return [...new Set(ids)];
+      }catch(e){
+        console.warn('[allowed] fetch error:', e);
+        return [];
+      }
+    }
+
+    async function loadLatestForAllowed(){
+      const ids = knownIds.slice();
+      const limit = 1;
+      const jobs = ids.map(async (idKey)=>{
+        const tagAddrParam = macDisplay(idKey);
+        const url = `${API_BASE}/${COLLECTION_PATH}?tag_address=${encodeURIComponent(tagAddrParam)}&days=1&order=desc&limit=${limit}`;
+        try{
+          const res = await fetch(url, {mode:'cors'});
+          const data = await res.json().catch(()=> []);
+          const rows = Array.isArray(data) ? data : (data.items || []);
+          const it = rows[0];
+          if (!it) { if (!devices.has(idKey)) devices.set(idKey, { id: idKey }); return; }
+          const ts = pickTs(it);
+          const temp = toNum(it.temperature ?? it.temp);
+          const batt = toNum(it.battery_voltage ?? it.battery);
+          devices.set(idKey, {
+            ...(devices.get(idKey) || { id: idKey }),
+            temperature: temp,
+            battery_voltage: batt,
+            error_code: it.error_code ?? null,
+            send_type:  it.send_type  ?? null,
+            ts
+          });
+        }catch(e){
+          console.warn('[latest] fail for', idKey, e);
+          if (!devices.has(idKey)) devices.set(idKey, { id: idKey });
+        }
+      });
+      await Promise.all(jobs);
+    }
+
+    // WS 수신
+    function handleMessage(raw){
+      try{
+        const msg = JSON.parse(raw);
+        const idRaw = msg.tag_address || msg.device_id || msg.id;
+        const key = macHex12(idRaw);
+        if (!idRaw || !key) return;
+
+        if (!allowedSet.has(key)) return;
+
+        const temp = toNum(msg.temperature);
+        const batt = (msg.battery_voltage!=null) ? toNum(msg.battery_voltage)
+                    : (msg.battery!=null ? toNum(msg.battery) : null);
+        const lat  = toNum(msg.latitude);
+        const lng  = toNum(msg.longitude);
+        const tsRaw = toNum(msg.timestamp ?? msg.time ?? msg.ts ?? msg.timestamp_epoch) ?? Date.now();
+        const ts = tsRaw < 1e12 ? tsRaw*1000 : tsRaw;
+
+        const prev = devices.get(key) || { id: key };
+        devices.set(key, {
+          ...prev,
+          temperature: (temp ?? prev.temperature),
+          battery_voltage: (batt ?? prev.battery_voltage),
+          lat: (lat ?? prev.lat),
+          lng: (lng ?? prev.lng),
+          error_code: (msg.error_code ?? prev.error_code),
+          send_type:  (msg.send_type  ?? prev.send_type),
+          ts
+        });
+
+        updateTicker();
+      }catch(e){
+        console.error('WS parse error:', e, raw);
+      }
+    }
+    let ws, retry=0;
+    function connectWS(){
+      try{
+        ws = new WebSocket(WS_URL);
+        ws.onopen = ()=>{ retry=0; };
+        ws.onmessage = (ev)=> handleMessage(ev.data);
+        ws.onclose = ()=> setTimeout(connectWS, Math.min(1000*(++retry), 10000));
+        ws.onerror = ()=> { try{ ws.close(); }catch{} };
+      }catch(e){
+        console.warn('WS failed', e);
+      }
+    }
+
+    async function refreshAll(){
+      knownIds = await fetchAllowedTagIdsFromServer();
+      window.knownIds = knownIds;
+      allowedSet.clear();
+      for (const k of knownIds) allowedSet.add(k);
+
+      for (const k of Array.from(devices.keys())) {
+        if (!allowedSet.has(k)) devices.delete(k);
+      }
+
+      if (knownIds.length) {
+        await loadLatestForAllowed();
+      } else {
+        devices.clear();
+      }
+
+      // ❑ 전광판 허브가 참조하는 전역 필터값 노출 + 재적용
+      window.__ALLOWED_TAG_IDS = [...allowedSet];   // 12HEX 배열
+      window.__ALLOWED_READY   = true;
+      window.SJUI?.TickerHub?.refreshFilter?.();
+
+      updateTicker();
+    }
+    window.refreshAll = refreshAll;
+
+    // 시작
+    await refreshAll();
+    connectWS();
+    setInterval(refreshAll, 10_000);
+  </script>
+
+  <script>
+    window.__SJ_SIDEBAR__ = {
+      logo: { text: 'Tag Monitor', href: 'design.html', iconSrc: '', version: 'v0.1' },
+      search: false,
+      sections: [
+        { title: 'Main', items: [
+          { icon: 'ri-time-line',         label: '실시간 대시보드', href: 'design.html',  activeMatch: 'design.html' },
+          { icon: 'ri-device-line',       label: '디바이스 상세',   href: 'detail.html',  activeMatch: 'detail.html' },
+          { icon: 'ri-price-tag-3-line',  label: '태그',            href: 'tag.html',     activeMatch: 'tag.html' },
+          { icon: 'ri-rfid-line',         label: '게이트웨이',      href: 'gateway.html', activeMatch: 'gateway.html' },
+          { icon: 'ri-alarm-warning-line',label: '알람',            href: 'alarm.html',   activeMatch: 'alarm.html' },
+          { icon: 'ri-settings-3-line',   label: '설정',            href: 'setting.html', activeMatch: 'setting.html' }
+        ] }
+      ],
+      initiallyOpen: false
+    };
+  </script>
+
+  <!-- 인사말 슬롯 주입 (기존 유지) -->
+  <script>
+    (function mountGreetSlot(){
+      function inject(){
+        const root = document.querySelector('[data-sj-sidebar]');
+        if (!root || document.getElementById('sidebar-greet')) return;
+        const logo = root.querySelector('.sj-sidebar__logo');
+        const box  = document.createElement('div');
+        box.id = 'sidebar-greet';
+        box.className = 'px-4 py-1 text-[12px] text-gray-700 hidden';
+        box.innerHTML = '<span id="sidebar-greet-name"></span>님 안녕하세요!';
+        if (logo && logo.parentNode) {
+          logo.parentNode.insertBefore(box, logo.nextSibling);
+        } else {
+          root.appendChild(box);
+        }
+      }
+      const run = () => setTimeout(inject, 0);
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run, { once: true });
+      } else {
+        run();
+      }
+      window.__showSidebarGreet = function(email){
+        try{
+          email = email || sessionStorage.getItem('app_user_email') || '';
+          const box  = document.getElementById('sidebar-greet');
+          const name = document.getElementById('sidebar-greet-name');
+          if (box && name && email){ name.textContent = email; box.classList.remove('hidden'); }
+        }catch{}
+      };
+      setTimeout(()=> window.__showSidebarGreet && window.__showSidebarGreet(), 400);
+    })();
+  </script>
+
+  <!-- ===== 페이지 로직(팀/태그/유저) - 기존 유지 ===== -->
+  <script>
+    const MYTAG_KEY = 'app_my_tags_v1';
+    function currentEmail(){ return sessionStorage.getItem('app_user_email') || ''; }
+    function readAll(){ try { return JSON.parse(localStorage.getItem(MYTAG_KEY) || '{}'); } catch { return {}; } }
+    function writeAll(o){ localStorage.setItem(MYTAG_KEY, JSON.stringify(o)); }
+    function loadMyTags(){
+      const all = readAll(); const email = currentEmail();
+      return Array.isArray(all[email]) ? all[email] : [];
+    }
+    function saveMyTags(list){
+      const all = readAll(); const email = currentEmail();
+      all[email] = list; writeAll(all);
+    }
+    function normalizeId(s){
+      return String(s||'').trim().toUpperCase().replace(/\s+/g,'');
+    }
+
+    const TEAM_KEY = 'app_parent_id';
+    function loadTeamId(){ try { return localStorage.getItem(TEAM_KEY) || ''; } catch { return ''; } }
+    function saveTeamId(v){ try { localStorage.setItem(TEAM_KEY, v); } catch {} }
+    function showTeamId(){
+      const now = loadTeamId();
+      const $now = document.getElementById('teamIdNow');
+      const $inp = document.getElementById('teamId');
+      if ($now) $now.textContent = now || '—';
+      if ($inp && now && !$inp.value) $inp.value = now;
+    }
+    (function bindTeamBlock(){
+      const $btnSave  = document.getElementById('saveTeamBtn');
+      const $btnPatch = document.getElementById('updateTeamBtn');
+      const $inp      = document.getElementById('teamId');
+      const $msg      = document.getElementById('teamMsg');
+
+      function flashTeam(s){
+        if($msg){
+          $msg.textContent = s;
+          setTimeout(()=> $msg.textContent = '', 1200);
+        }
+      }
+      function showTeamIdLocal(){
+        const now = loadTeamId();
+        const $now = document.getElementById('teamIdNow');
+        if ($now) $now.textContent = now || '—';
+        if ($inp && now && !$inp.value) $inp.value = now;
+      }
+      async function handleSaveLocal(){
+        const v = ($inp?.value || '').trim();
+        if (!v){ alert('팀 계정 ID를 입력하세요.'); $inp?.focus(); return; }
+        saveTeamId(v);
+        showTeamIdLocal();
+        flashTeam('저장했습니다.');
+        try{
+          const ready = !!getUserIdFromSidebar() && !!loadTeamId();
+          const addBtn = document.getElementById('addBtn');
+          if (addBtn) addBtn.disabled = !ready;
+        }catch{}
+      }
+      async function handlePatchServer(){
+        const userId = getUserIdFromSidebar();
+        if (!userId){ alert('로그인 정보가 없습니다.'); return; }
+        const newParent = ($inp?.value || '').trim();
+        if (!newParent){ alert('변경할 parentId를 입력하세요.'); $inp?.focus(); return; }
+        const payload = { user_id: userId, parent_id: newParent };
+        try{
+          const res = await fetch(window.__API__.REGISTER_API, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok){
+            const t = await res.text().catch(()=> '');
+            alert(`서버 업데이트 실패: ${res.status}\n${t}`);
+            return;
+          }
+          saveTeamId(newParent);
+          showTeamIdLocal();
+          flashTeam('서버/로컬 업데이트 완료');
+          try{ await syncLocalFromAllowed(isAdmin() ? 'all' : 'descendants'); }catch{}
+        } catch (e){
+          console.error(e);
+          alert('서버와 통신할 수 없습니다.');
+        }
+      }
+      if ($btnSave)  $btnSave.addEventListener('click', handleSaveLocal);
+      if ($btnPatch) $btnPatch.addEventListener('click', handlePatchServer);
+      showTeamIdLocal();
+    })();
+
+    const $name = document.getElementById('tagName');
+    const $id   = document.getElementById('tagId');
+    const $msg  = document.getElementById('msg');
+    const $body = document.getElementById('listBody');
+    const $empty= document.getElementById('empty');
+    const $add  = document.getElementById('addBtn');
+    const $exp  = document.getElementById('exportBtn');
+    const $imp  = document.getElementById('importFile');
+    const $clr  = document.getElementById('clearBtn');
+
+    const REGISTER_API = window.__API__.REGISTER_API;
+    const ALLOWED_API  = window.__API__.ALLOWED_API;
+
+    function macHex12(raw){
+      const s = String(raw||'').trim();
+      const noSep = s.replace(/[:\-\.]/g, '');
+      if (!/^[0-9A-Fa-f]{12}$/.test(noSep)) return null;
+      return noSep.toUpperCase();
+    }
+    function macPretty(raw){
+      const h = macHex12(raw);
+      return h ? h.match(/.{2}/g).join(':') : String(raw||'');
+    }
+    function getUserIdFromSidebar() {
+      const txt = (document.getElementById('sidebar-greet-name')?.textContent || '').trim();
+      return txt || (sessionStorage.getItem('app_user_email') || '').trim();
+    }
+
+    async function registerTagToServer(tagId) {
+      const userId = getUserIdFromSidebar();
+      if (!userId) { alert('로그인 정보가 없습니다.'); return { ok:false }; }
+      try {
+        // ✅ 기존 로직 유지: 팀 입력칸/로컬 저장된 parentId 사용
+        const parentId = (document.getElementById('teamId')?.value || loadTeamId()).trim();
+        const payload = {
+          tag_mac: normalizeId(tagId),
+          user_id : userId,
+          ownerId: userId,
+          parentId: parentId || null,
+          rootParentId: parentId || userId,
+          depth: parentId ? 1 : 0,
+          type: 'user',
+          sub_method : 'post'
+        };
+        const res = await fetch(REGISTER_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const text = await res.text(); let data={}; try{ data=JSON.parse(text);}catch{}
+        if (res.status === 201 && data.ok) return { ok:true };
+        if (res.status === 409) { alert('이미 등록된 디바이스입니다.'); return { ok:false, conflict:true }; }
+        alert('서버 등록 중 오류가 발생했습니다.');
+        return { ok:false };
+      } catch (e) {
+        console.error(e); alert('서버와 통신할 수 없습니다.'); return { ok:false };
+      }
+    }
+
+    async function unregisterTagFromServer(tagId) {
+      const userId = getUserIdFromSidebar();
+      if (!userId) { alert('로그인 정보가 없습니다.'); return false; }
+      try {
+        const payload = { tag_mac: normalizeId(tagId), user_id: userId, delete_mode : 'tag', sub_method : 'delete' };
+        const res = await fetch(REGISTER_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const text = await res.text(); let data={}; try{ data=JSON.parse(text);}catch{}
+        if (res.status === 200 && data.ok) return true;
+        if (res.status === 404) { alert('서버에 해당 태그가 없습니다.'); return false; }
+        if (res.status === 403) { alert('이 태그는 다른 사용자가 소유 중입니다.'); return false; }
+        alert('서버 삭제 중 오류가 발생했습니다.'); return false;
+      } catch (e) {
+        console.error(e); alert('서버와 통신할 수 없습니다.'); return false;
+      }
+    }
+
+    async function syncLocalFromAllowed(scope) {
+      const userId = getUserIdFromSidebar();
+      if (!userId) return;
+      try {
+        const url = new URL(ALLOWED_API);
+        url.searchParams.set('user_id', userId);
+        url.searchParams.set('scope', scope || (isAdmin() ? 'all' : 'descendants'));
+        url.searchParams.set('include_owner', '1');
+        const res  = await fetch(url.toString(), { method:'GET', mode:'cors' });
+        const data = await res.json().catch(()=> ({}));
+        if (!res.ok || !data || !Array.isArray(data.tags)) return;
+
+        const outByKey = new Map();
+        for (const t of data.tags){
+          const raw = (typeof t==='string') ? t : (t.tag_mac || t.id || t.mac || t.tagMac || '');
+          const k   = macHex12(raw);
+          if (!k) continue;
+          const display = macPretty(k);
+          const ownerId = (typeof t==='string') ? userId : (t.ownerId || t.owner_id || userId);
+          if (!outByKey.has(k)) outByKey.set(k, { name:'', id: display, ownerId });
+        }
+        const list = [...outByKey.values()];
+
+        saveMyTags(list);
+        render();
+      } catch (e) {
+        console.warn('[syncLocalFromAllowed] failed', e);
+      }
+    }
+
+    function toggleScroll(containerId, tbodyId, limit = 10) {
+      const wrap = document.getElementById(containerId);
+      const body = document.getElementById(tbodyId);
+      if (!wrap || !body) return;
+      const rows = body.querySelectorAll('tr').length;
+      const on = rows > limit;
+      wrap.classList.toggle('max-h-64', on);
+      wrap.classList.toggle('overflow-y-auto', on);
+      wrap.classList.toggle('border-t', rows > 0);
+    }
+
+    function bindDeleteButtons() {
+      document.querySelectorAll('#listBody .del').forEach(btn => {
+        btn.onclick = async () => {
+          const idx = Number(btn.dataset.idx);
+          const list = loadMyTags();
+          const target = list[idx];
+          if (!target) return;
+          if (!confirm(`태그 ${target.id} 를 삭제할까요?`)) return;
+          const ok = await unregisterTagFromServer(target.id);
+          if (!ok) return;
+          list.splice(idx, 1);
+          saveMyTags(list);
+          render(); flash('삭제했습니다.');
+        };
+      });
+    }
+
+    function render(){
+      const list = loadMyTags();
+      const esc = s => String(s).replace(/</g,'&lt;');
+      document.getElementById('empty').classList.toggle('hidden', list.length > 0);
+      document.getElementById('listBody').innerHTML = list.map((x, idx) => `
+        <tr>
+          <td class="px-3 py-2">${x.name ? esc(x.name) : '—'}</td>
+          <td class="px-3 py-2 mono">${esc(x.id)}</td>
+          <td class="px-3 py-2">${x.ownerId ? esc(x.ownerId) : '—'}</td>
+          <td class="px-3 py-2 text-right">
+            <button data-idx="${idx}" class="del px-2 py-1 border rounded bg-white hover:bg-gray-50">삭제</button>
+          </td>
+        </tr>
+      `).join('');
+      bindDeleteButtons();
+      toggleScroll('tagTableWrap', 'listBody', 10);
+    }
+
+    function flash(text){
+      const $msg = document.getElementById('msg');
+      $msg.textContent = text;
+      setTimeout(()=> $msg.textContent='', 1200);
+    }
+
+    document.getElementById('addBtn').addEventListener('click', async () => {
+      const name = document.getElementById('tagName').value.trim();
+      const id   = normalizeId(document.getElementById('tagId').value);
+      if (!id){ flash('태그 ID를 입력해주세요.'); document.getElementById('tagId').focus(); return; }
+      const userId = getUserIdFromSidebar();
+      if (!userId) { alert('로그인 정보가 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요.'); return; }
+      const r = await registerTagToServer(id);
+      if (!r.ok) return;
+      const list = loadMyTags();
+      if (!list.some(x=> x.id === id)) {
+        list.push({ name, id, ownerId: userId });
+        saveMyTags(list);
+      }
+      document.getElementById('tagName').value='';
+      document.getElementById('tagId').value='';
+      render(); flash('추가했습니다.');
+    });
+
+    document.getElementById('exportBtn').addEventListener('click', ()=>{
+      const email = currentEmail();
+      const data = { [email]: loadMyTags() };
+      const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `my-tags-${email || 'user'}.json`; a.click();
+      setTimeout(()=> URL.revokeObjectURL(url), 0);
+    });
+
+    document.getElementById('importFile').addEventListener('change', async (e)=>{
+      const f = e.target.files[0]; if (!f) return;
+      try{
+        const text = await f.text();
+        const obj  = JSON.parse(text);
+        const email= currentEmail();
+        if (!Array.isArray(obj[email])) throw 0;
+        const list = obj[email].map(x=>({
+          name: x.name||'',
+          id: normalizeId(x.id||x.tag_id||''),
+          ownerId: x.ownerId || x.owner_id || ''
+        })).filter(x=> x.id);
+        saveMyTags(list); render(); flash('불러왔습니다.');
+      }catch{ alert('올바른 JSON이 아닙니다.'); }
+      e.target.value = '';
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', ()=>{
+      if (!confirm('내 태그를 모두 삭제할까요?')) return;
+      saveMyTags([]); render(); flash('모두 삭제했습니다.');
+    });
+
+    (function init(){
+      showTeamId();
+      setTimeout(()=>{ document.getElementById('addBtn').disabled = !getUserIdFromSidebar(); }, 150);
+      window.addEventListener('storage', (e)=>{ if (e.key === MYTAG_KEY) render(); });
+      render();
+      setTimeout(()=> syncLocalFromAllowed(isAdmin() ? 'all' : 'descendants'), 300);
+    })();
+
+    function isAdmin(){
+      try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; }
+    }
+
+    async function listAccountsViaTags(){
+      const me = getUserIdFromSidebar(); if (!me) return [];
+      const url = new URL(ALLOWED_API);
+      url.searchParams.set('user_id', me);
+      url.searchParams.set('scope', 'all');
+      url.searchParams.set('include_owner', '1');
+      const res = await fetch(url.toString(), { method:'GET', mode:'cors' });
+      const data = await res.json().catch(()=> ({}));
+      if (!res.ok || !Array.isArray(data.tags)) return [];
+      const counts = new Map();
+      for (const t of data.tags){
+        const owner = (typeof t === 'string') ? null : (t.ownerId || null);
+        if (!owner) continue;
+        counts.set(owner, (counts.get(owner) || 0) + 1);
+      }
+      return [...counts.entries()].map(([accountId, tagCount]) => ({ accountId, tagCount }));
+    }
+
+    function renderUserList(rows){
+      const $tbody = document.getElementById('userList');
+      const $empty = document.getElementById('userEmpty');
+      if (!rows.length){
+        $tbody.innerHTML = '';
+        $empty.classList.remove('hidden');
+        toggleScroll('userTableWrap', 'userList', 10);
+        return;
+      }
+      $empty.classList.add('hidden');
+      const esc = s => String(s).replace(/</g,'&lt;');
+      $tbody.innerHTML = rows.map(r => `
+        <tr>
+          <td class="px-3 py-2">${esc(r.accountId)}</td>
+          <td class="px-3 py-2 text-right">${r.tagCount ?? 0}</td>
+          <td class="px-3 py-2 text-right">
+            <button class="user-del px-2 py-1 border rounded bg-white hover:bg-gray-50" data-id="${esc(r.accountId)}">삭제</button>
+          </td>
+        </tr>
+      `).join('');
+      document.querySelectorAll('.user-del').forEach(btn=>{
+        btn.onclick = () => deleteAccount(btn.dataset.id);
+      });
+    }
+
+    async function refreshUserList(){
+      const list = await listAccountsViaTags();
+      renderUserList(list);
+    }
+
+    async function deleteAccount(accountId){
+      if (!accountId) return;
+      if (!confirm(`계정 ${accountId} 를 삭제할까요?\n(하위 계정 및 태그도 함께 삭제될 수 있습니다)`)) return;
+      const adminId = getUserIdFromSidebar();
+      const payload = {
+        sub_method: 'delete',
+        delete_mode: 'account',
+        user_id: adminId,
+        target_id: accountId
+      };
+      const res = await fetch(REGISTER_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(()=> ({}));
+      if (res.ok && data.ok){ alert('삭제 완료'); refreshUserList(); }
+      else { alert(`삭제 실패: ${data.error || res.status}`); }
+    }
+
+    (function initUserAdmin(){
+      const $wrap = document.getElementById('admin-users-wrap');
+      if (!$wrap) return;
+      const isAdminUser = isAdmin();
+      $wrap.classList.toggle('hidden', !isAdminUser);
+      if (!isAdminUser) return;
+      const $refresh = document.getElementById('userRefresh');
+      if ($refresh) $refresh.onclick = refreshUserList;
+      const $manualDelete = document.getElementById('manualDelete');
+      if ($manualDelete) {
+        $manualDelete.onclick = ()=> {
+          const v = (document.getElementById('manualAccountId').value || '').trim();
+          if (v) deleteAccount(v);
+        };
+      }
+      refreshUserList();
+    })();
+  </script>
+</body>
+</html>

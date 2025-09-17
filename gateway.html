@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <!-- ▼▼▼ 보호 페이지 공통: <head> 맨 위에 넣기 ▼▼▼ -->
+  <meta charset="UTF-8" />
+  <style> html.auth-check { visibility: hidden } </style>
+  <style>
+  /* ...전광판 페이드인 */
+  #hdr-rotator{ position:relative; min-height:24px; }
+  #hdr-rotator .rot-line{
+    position:absolute; inset:0;
+    opacity:0; transform:translateY(8px);
+    transition:opacity .4s ease, transform .4s ease;
+    will-change:opacity,transform;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #hdr-rotator .rot-line.show{
+    opacity:1; transform:translateY(0);
+  }
+</style>
+
+  <script>
+    // UI 깜빡임 방지: 인증 끝날 때까지 숨김
+    document.documentElement.classList.add('auth-check');
+
+    // 로그인 페이지 경로 (필요시 상대경로 조정)
+    window.__LOGIN_PAGE__ = 'login.html';
+
+    // Cognito User Pool 설정
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft', // ← 실제 값
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota', // ← 실제 값
+    };
+  </script>
+
+  <!-- Cognito SDK들 (순서 중요) -->
+  <!-- <script src="aws-sdk.min.js"></script> -->
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <!-- 인증 가드 -->
+  <script>
+    (function authGuard() {
+      function goLogin() {
+        const u = new URL(window.__LOGIN_PAGE__, location.href);
+        u.searchParams.set('redirect', location.href); // 로그인 후 돌아올 곳
+        location.replace(u.toString());
+      }
+
+      // SDK 로드 대기 후 실행
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity){ return setTimeout(waitLib, 20); }
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+
+          // 🔸 브라우저 세션 플래그가 없으면 강제 재로그인
+          if (!sessionStorage.getItem('app_session')) {
+            const u = pool.getCurrentUser();
+            if (u) { try { u.signOut(); } catch(e){} } // 남아있던 토큰 정리
+            return goLogin();
+          }
+
+          const user = pool.getCurrentUser();
+          if (!user) return goLogin();
+
+          user.getSession(function(err, session){
+            if (err || !session || !session.isValid()) return goLogin();
+
+            try {
+              const groups = (session.getIdToken().payload || {})['cognito:groups'] || [];
+              sessionStorage.setItem('app_is_admin', groups.includes('admin') ? '1' : '0');
+            } catch {}
+
+
+            // 페이지 표시
+            document.documentElement.classList.remove('auth-check');
+
+            // ✅ 이메일(없으면 username) 읽어서 세션캐시에 저장 + 즉시 표시 시도
+            user.getUserAttributes(function(e, attrs){
+              let email = (typeof user.getUsername === 'function') ? user.getUsername() : '';
+              if (!e && Array.isArray(attrs)) {
+                const em = attrs.find(a => (a.getName && a.getName() === 'email') || a?.Name === 'email');
+                if (em) email = (em.getValue ? em.getValue() : em.Value);
+              }
+
+              try { sessionStorage.setItem('app_user_email', email); } catch {}
+
+              // 공통 사이드바 인사말 표시
+              try { window.__showSidebarGreet && window.__showSidebarGreet(email); } catch {}
+            });
+          });
+        }catch(e){
+          goLogin();
+        }
+      })();
+    })();
+  </script>
+  <!-- ▲▲▲ 여기까지가 '무조건 로그인 먼저' 가드 ▲▲▲ -->
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tag Monitor</title>
+
+  <!-- Favicon / Fonts / Icons / Tailwind -->
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { primary:'#1E88E5', secondary:'#F5F6FA' },
+          borderRadius: {
+            'none':'0px','sm':'4px', DEFAULT:'8px','md':'12px','lg':'16px',
+            'xl':'20px','2xl':'24px','3xl':'32px','full':'9999px','button':'8px'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- ★ 공통 UI CSS -->
+  <link rel="stylesheet" href="./ui-common.css" />
+
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc}
+    .mono{font-family:'Roboto Mono',monospace}
+  </style>
+</head>
+<body>
+  <!-- ★ 공통 레이아웃(sj-shell) -->
+  <div class="sj-shell">
+    <!-- 공통 사이드바: 자동 렌더 -->
+    <aside class="sj-sidebar" data-sj-sidebar></aside>
+
+    <!-- 메인 -->
+    <main class="sj-main">
+      <!-- 공통 헤더 -->
+      <header class="sj-header">
+        <div class="sj-title text-sm">
+          
+          <span id="total-count" class="ml-2 text-xs text-gray-400"></span>
+        </div>
+        <!-- 전광판(공통 로테이터) -->
+        <div data-sj-rotator id="hdr-rotator" class="w-[240px] sm:w-[320px] md:w-[480px]"></div>
+      </header>
+
+      <!-- 페이지 콘텐츠 -->
+      <section class="p-6">
+        <div class="mb-6 flex items-end justify-between">
+          <div>
+            <h1 class="text-xl font-bold text-gray-800">게이트웨이 모니터링</h1>
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="hidden sm:inline text-gray-300"> </span>
+            <button id="refresh-list" class="px-2 py-1 border rounded-md bg-white hover:bg-gray-50">목록 새로고침</button>
+          </div>
+        </div>
+
+        <!-- ▼ 검색 + 표 -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div class="p-3 flex items-center justify-between gap-2 text-xs">
+            <div id="gw-list-title" class="text-gray-700 font-medium">게이트웨이 목록 (0)</div>
+            <div class="relative shrink-0">
+              <i class="ri-search-line text-gray-400 absolute left-2 top-1/2 -translate-y-1/2 text-sm"></i>
+              <input id="search" type="text" placeholder="게이트웨이 ID 또는 상태 검색…"
+                    class="w-48 sm:w-60 md:w-72 pl-7 pr-3 py-1.5 text-sm border rounded-md bg-gray-50
+                           focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300">
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="bg-gray-50 border-y border-gray-200">
+                <tr class="text-gray-600">
+                  <th class="px-3 py-2 text-left whitespace-nowrap">게이트웨이 ID</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">이름</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">위치</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">펌웨어</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">태그 수</th>
+                </tr>
+              </thead>
+              <tbody id="table-body" class="divide-y divide-gray-100"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ★ 공통 UI JS (autoInit로 사이드바/로테이터 자동 바인딩) -->
+  <script type="module" src="./ui-common.js"></script>
+
+  <script type="module">
+    import {
+      buildTickerTextsFromDevices,
+      publishAlerts,
+      subscribeTickerFromOthers,
+      macPretty
+    } from './ticker-common.js';
+
+    // 모든 페이지에서 1회
+    subscribeTickerFromOthers();
+
+    function updateTicker() {
+      const texts = buildTickerTextsFromDevices({
+        devicesMap: window.devices ?? new Map(),
+        ids:        window.knownIds ?? [],
+        activeMs:   60_000,
+        // labeler: (id) => macPretty(id),
+      });
+
+      publishAlerts(
+        texts.map(t => ({ text: t, level: 'info' })),
+        { mode:'replace', staggerMs:1200, broadcast:true }
+      );
+    }
+
+    // 전역 노출(다른 코드가 호출)
+    window.updateTicker = updateTicker;
+
+    // 공통 헤더 로테이터 장착(일부 환경에서 autoInit 타이밍 이슈 예방)
+    (function waitSJUI(){ if(!window.SJUI) return setTimeout(waitSJUI,20); window.SJUI.mountRotators?.(); })();
+
+    // 초기/주기 호출
+    updateTicker();
+    window.__tickerTimer ||= setInterval(updateTicker, 5000);
+  </script>
+
+  <!-- ★ 사이드바 항목 구성 -->
+  <script>
+    window.__SJ_SIDEBAR__ = {
+      logo: { text: 'Tag Monitor', href: 'design.html', iconSrc: '', version: 'v0.1' },
+      search: false,
+      sections: [
+        { title: 'Main', items: [
+          { icon: 'ri-time-line',         label: '실시간 대시보드', href: 'design.html',  activeMatch: 'design.html' },
+          { icon: 'ri-device-line',       label: '디바이스 상세',   href: 'detail.html',  activeMatch: 'detail.html' },
+          { icon: 'ri-price-tag-3-line',  label: '태그',            href: 'tag.html',     activeMatch: 'tag.html' },
+          { icon: 'ri-rfid-line',         label: '게이트웨이',      href: 'gateway.html', activeMatch: 'gateway.html' },
+          { icon: 'ri-alarm-warning-line',label: '알람',            href: 'alarm.html',   activeMatch: 'alarm.html' },
+          { icon: 'ri-settings-3-line',   label: '설정',            href: 'setting.html', activeMatch: 'setting.html' }
+        ] }
+      ],
+      initiallyOpen: false
+    };
+  </script>
+
+  <!-- ★ 인사말 슬롯 주입(공통 사이드바 렌더 후) -->
+  <script>
+    (function mountGreetSlot(){
+      function inject(){
+        const root = document.querySelector('[data-sj-sidebar]');
+        if (!root || document.getElementById('sidebar-greet')) return;
+        const logo = root.querySelector('.sj-sidebar__logo');
+        const box  = document.createElement('div');
+        box.id = 'sidebar-greet';
+        box.className = 'px-4 py-1 text-[12px] text-gray-700 hidden';
+        box.innerHTML = '<span id="sidebar-greet-name"></span>님 안녕하세요!';
+        if (logo && logo.parentNode) {
+          logo.parentNode.insertBefore(box, logo.nextSibling);
+        } else {
+          root.appendChild(box);
+        }
+      }
+      const run = () => setTimeout(inject, 0);
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run, { once: true });
+      } else { run(); }
+      window.__showSidebarGreet = function(email){
+        try{
+          email = email || sessionStorage.getItem('app_user_email') || '';
+          const box  = document.getElementById('sidebar-greet');
+          const name = document.getElementById('sidebar-greet-name');
+          if (box && name && email){ name.textContent = email; box.classList.remove('hidden'); }
+        }catch{}
+      };
+      setTimeout(()=> window.__showSidebarGreet && window.__showSidebarGreet(), 400);
+    })();
+  </script>
+
+  <!-- ===== 기능 스크립트 ===== -->
+  <script>
+    // ===== 공통 설정 =====
+    const WS_URL = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const API_BASE = "https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const ALLOWED_API = "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed";
+
+    // ▼ 태그(디바이스) 컬렉션: 전광판용
+    const TAG_COLLECTION = "calculated_locations";
+
+    // ▼ 게이트웨이 컬렉션: 테이블용
+    const GW_COLLECTION = "gateway_data";
+
+    const ACTIVE_MS = 60 * 1000;
+    const BACKFILL_LIMIT_PER_ID = 1;
+
+    
+    let __ALLOWED_TAG_KEYS = new Set(); // 12HEX 키 집합
+    let __ALLOWED_READY    = false;
+    window.__ALLOWED_TAG_IDS = [];
+    window.__ALLOWED_READY   = false;
+
+    function macHex12(raw){
+      const s = String(raw||'').toUpperCase().replace(/[^0-9A-F]/g,'');
+      return /^[0-9A-F]{12}$/.test(s) ? s : null;
+    }
+    // 화면 표시용(콜론 추가)
+    function macPretty(raw){
+      const h = macHex12(raw);
+      return h ? h.match(/.{2}/g).join(':') : String(raw||'');
+    }
+    
+    async function fetchAllowedTagIdsFromServer(){
+        const me = currentEmail();
+        __ALLOWED_TAG_KEYS = new Set();
+        if (!me) { __ALLOWED_READY = true; return; }
+
+        const token = await getIdToken();
+        const url = new URL(ALLOWED_API);
+        url.searchParams.set('user_id', me);
+        url.searchParams.set('scope', isAdmin() ? 'all' : 'descendants');
+        url.searchParams.set('include_owner', '1');
+
+        try{
+          const res = await fetch(url.toString(), {
+            method:'GET',
+            headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+            mode:'cors'
+          });
+          const data = await res.json().catch(()=> ({}));
+          if (res.ok && data && data.tags){
+            const raw = Array.isArray(data.tags) ? data.tags : [];
+            for (const t of raw){
+              const rawId = (typeof t === 'string') ? t : (t?.tag_mac || t?.id || t?.mac || t?.tagMac);
+              const k = macHex12(rawId);
+              if (k) __ALLOWED_TAG_KEYS.add(k);
+              else console.warn('[allowed] invalid mac skipped:', rawId);
+            }
+          } else {
+            console.warn('[allowed] non-ok:', res.status, data);
+          }
+        }catch(e){
+          console.error('[allowed] fetch error:', e);
+        }finally{
+          __ALLOWED_READY = true;
+          window.__ALLOWED_TAG_IDS = [...__ALLOWED_TAG_KEYS];
+          window.__ALLOWED_READY   = true;
+          window.SJUI?.TickerHub?.refreshFilter?.();
+        }
+      }
+
+      async function prepareAllowedTags(){ await fetchAllowedTagIdsFromServer(); }
+      function isAllowedDevice(id){
+        if (!id || !__ALLOWED_READY) return false;
+        const k = macHex12(id);
+        return !!(k && __ALLOWED_TAG_KEYS.has(k));
+      }
+    // ===== 유틸 =====
+    const fmtTime = (ms) => new Intl.DateTimeFormat('ko-KR', {
+      timeZone:'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+    }).format(ms);
+    const toNum = (v) => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+    function pickTs(x){
+      let t = toNum(x.timestamp ?? x.ts ?? x.timestamp_epoch ?? x.raw_time ?? x.time);
+      if (t==null) return null;
+      return (t < 1e12) ? t*1000 : t;
+    }
+    const badge = (label, cls) => `<span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${cls}">${label}</span>`;
+
+    // gw_statue → 배지/키 변환
+    function gwStatusBadge(v){
+      const raw = (v ?? '').toString().trim();
+      const s = raw.toLowerCase();
+      if (['0','ok','normal','정상','online'].includes(s)) return {label:'정상', cls:'bg-green-100 text-green-700 border-green-200', key:'ok'};
+      if (['1','warn','warning','경고'].includes(s))       return {label:'경고', cls:'bg-amber-100 text-amber-700 border-amber-200', key:'warn'};
+      if (['2','error','에러','down','offline'].includes(s))return {label:'에러',  cls:'bg-red-100 text-red-700 border-red-200',   key:'error'};
+      if (raw==='') return {label:'—', cls:'bg-gray-100 text-gray-700 border-gray-200', key:'other'};
+      return {label:raw, cls:'bg-gray-100 text-gray-700 border-gray-200', key:'other'};
+    }
+
+    // ===== DOM =====
+    const $tbody   = document.getElementById('table-body');
+    const $count   = document.getElementById('total-count');
+    const $search  = document.getElementById('search');
+    const $refresh = document.getElementById('refresh-list');
+    const $title   = document.getElementById('gw-list-title');
+
+    // ===== 상태 =====
+    // 전광판용 태그 상태
+    const tags = new Map();   // tag_id -> {error_code, ts, lastWsTs, _ws}
+    let tagIds = [];
+
+    // 게이트웨이 테이블 상태
+    const gateways = new Map(); // gw_address -> {lat,lng,gw_statue,connected_tag,ts}
+    let gwIds = [];
+
+    // 검색어
+    let searchTerm = '';
+
+    // ===== 게이트웨이 테이블 렌더 =====
+    function renderTable(){
+      const now = Date.now();
+
+      // 제목/카운트
+      const list = gwIds.filter(id => {
+        const g = gateways.get(id) || {};
+        const hay = `${id} ${g.gateway_name||''} ${g.gw_version||''}`.toLowerCase();
+        return !searchTerm || hay.includes(searchTerm);
+      });
+
+      if ($title) $title.textContent = `게이트웨이 목록 (${list.length})`;
+      $count.textContent = list.length ? `표시: ${list.length}대` : '';
+
+      const rows = [];
+      for (const id of list){
+        const g = gateways.get(id) || {};
+        const lat = Number.isFinite(g.lat) ? Number(g.lat).toFixed(5) : '—';
+        const lng = Number.isFinite(g.lng) ? Number(g.lng).toFixed(5) : '—';
+        const loc = (lat==='—' || lng==='—') ? '—' : `${lat}, ${lng}`;
+        const name = g.gateway_name ?? '—';
+        const ver  = g.gw_version ?? '—';
+        const tagN = Number.isFinite(g.tag_num) ? g.tag_num : '—';
+
+        rows.push(`
+          <tr class="hover:bg-gray-50">
+            <td class="px-3 py-2 align-middle"><div class="mono font-medium">${id}</div></td>
+            <td class="px-3 py-2 align-middle text-gray-700">${name}</td>
+            <td class="px-3 py-2 align-middle text-gray-700">${loc}</td>
+            <td class="px-3 py-2 align-middle text-gray-700">${ver}</td>
+            <td class="px-3 py-2 align-middle">${tagN}</td>
+          </tr>
+        `);
+      }
+      $tbody.innerHTML = rows.join('');
+    }
+
+
+    // ===== 데이터 로드 (태그: 전광판) =====
+    async function loadTagList(){
+      const url = `${API_BASE}/${TAG_COLLECTION}`;
+      try{
+        const res = await fetch(url, {mode:'cors'});
+        const txt = await res.text();
+        if (!res.ok){ knownIds=[]; window.knownIds=knownIds; window.updateTicker?.(); return; }
+        let data; try{ data = JSON.parse(txt); }catch{ knownIds=[]; window.knownIds=knownIds; window.updateTicker?.(); return; }
+
+        const list = Array.isArray(data?.devices) ? data.devices : (Array.isArray(data) ? data : []);
+        const set = new Set(knownIds);
+        for (const id of list){
+          const key = macHex12(id);
+          if (!key) continue;
+          if (__ALLOWED_READY && __ALLOWED_TAG_KEYS.size && !__ALLOWED_TAG_KEYS.has(key)) continue;
+          set.add(key);
+          if (!devices.has(key)) devices.set(key, {});
+        }
+        knownIds = [...set].sort();
+        window.knownIds = knownIds; // 전역 동기화
+      }catch(e){
+        knownIds=[]; window.knownIds=knownIds;
+      }
+      window.updateTicker && window.updateTicker();
+    }
+
+    async function backfillTagLatest(key12){
+      // key12: 12HEX
+      if (__ALLOWED_READY && __ALLOWED_TAG_KEYS.size && !__ALLOWED_TAG_KEYS.has(key12)) return;
+      const display = macPretty(key12);
+      const url = `${API_BASE}/${TAG_COLLECTION}?tag_address=${encodeURIComponent(display)}&days=1&order=desc&limit=${BACKFILL_LIMIT_PER_ID}`;
+      try{
+        const res = await fetch(url, {mode:'cors'});
+        const txt = await res.text();
+        if (!res.ok) return;
+        let data; try{ data = JSON.parse(txt); }catch{ return; }
+        const rows = Array.isArray(data) ? data : (data.items||[]);
+        if (!rows.length) return;
+        const r  = rows[0];
+        const ts = pickTs(r) ?? Date.now();
+        const cur = devices.get(key12) || {};
+        devices.set(key12, { ...cur, error_code: (r.error_code ?? cur.error_code), ts });
+      }catch(e){}
+    }
+
+    async function backfillAllTags(concurrency=4){
+      const ids = knownIds.slice(); // 이미 12HEX
+      let idx = 0;
+      async function worker(){
+        while (idx < ids.length){
+          const cur = ids[idx++];
+          await backfillTagLatest(cur);
+        }
+      }
+      const jobs = Array.from({length: Math.min(concurrency, ids.length)}, worker);
+      await Promise.all(jobs);
+      window.updateTicker && window.updateTicker();
+    }
+
+
+    // ===== 데이터 로드 (게이트웨이: 테이블) =====
+    async function loadGatewayList(){
+      const url = `${API_BASE}/${GW_COLLECTION}`;
+      console.log('Fetching Gateway Data from:', url); // 호출 전 로그
+      try {
+          const res = await fetch(url, {mode: 'cors'});
+          console.log('Response Status:', res.status); // 상태 코드 로그
+          const txt = await res.text(); // 응답 본문을 텍스트로 받기
+          console.log('Response Body:', txt); // 응답 본문을 로그로 출력
+
+          if (!res.ok) {
+              console.log('API Error:', txt); // 에러 응답 로그
+              gwIds = [];
+              renderTable();
+              return;
+          }
+
+          let data;
+          try {
+              data = JSON.parse(txt); // 응답을 JSON으로 변환
+          } catch (error) {
+              console.log('Error parsing response:', error);
+              gwIds = [];
+              renderTable();
+              return;
+          }
+
+          console.log('Parsed Data:', data); // JSON으로 변환된 데이터 확인
+
+          // 데이터 처리
+          const list = Array.isArray(data?.gateways) ? data.gateways : [];
+          const set = new Set(gwIds);
+
+          for (const x of list) {
+              const id = String(x.gw_address ?? x.id ?? x.gateway_id ?? x.gw_id ?? x).trim();
+              if (!id) continue;
+              set.add(id);
+
+              const prev = gateways.get(id) || {};
+              gateways.set(id, {
+                  ...prev,
+                  gateway_name: x.gateway_name ?? prev.gateway_name,
+                  gw_version: x.gw_version ?? prev.gw_version,
+                  tag_num: toNum(x.tag_num) ?? prev.tag_num,
+                  lat: toNum(x.latitude) ?? prev.lat,
+                  lng: toNum(x.longitude) ?? prev.lng,
+                  ts: pickTs(x) ?? prev.ts
+              });
+          }
+          gwIds = [...set]; // 정렬 유지
+          renderTable();
+      } catch (e) {
+          console.error('Error fetching gateway data:', e); // 에러 로그 출력
+          gwIds = [];
+      }
+  }
+
+
+
+    async function backfillGatewayLatest(id){
+      // 실제 쿼리 키는 gw_address 기준
+      const url = `${API_BASE}/${GW_COLLECTION}?gw_address=${encodeURIComponent(id)}`;
+      try{
+        const res = await fetch(url, {mode:'cors'});
+        const txt = await res.text();
+        if (!res.ok) return;
+        let data; try{ data = JSON.parse(txt); }catch{ return; }
+        const rows = Array.isArray(data) ? data : (data.items||[]);
+        if (!rows.length) return;
+        const r = rows[0];
+        const ts = pickTs(r) ?? Date.now();
+        const obj = gateways.get(id) || {};
+        gateways.set(id, {
+          ...obj,
+          lat: toNum(r.latitude) ?? obj.lat,
+          lng: toNum(r.longitude ?? r.longtitude) ?? obj.lng,
+          gw_statue: r.gw_statue ?? obj.gw_statue,
+          connected_tag: toNum(r.connected_tag ?? r.connted_tag) ?? obj.connected_tag,
+          ts
+        });
+      }catch(e){}
+    }
+    async function backfillAllGateways(concurrency=4){
+      const ids = gwIds.slice();
+      let idx = 0;
+      async function worker(){
+        while (idx < ids.length){
+          const cur = ids[idx++];
+          await backfillGatewayLatest(cur);
+        }
+      }
+      const jobs = Array.from({length: Math.min(concurrency, ids.length)}, worker);
+      await Promise.all(jobs);
+      renderTable();
+    }
+
+    // ===== WebSocket: 태그(전광판) + 게이트웨이(테이블) 처리 =====
+    const devices = new Map();
+    let knownIds = [];
+
+    // 공통 전광판에서 참조
+    window.devices  = devices;
+    window.knownIds = knownIds;
+
+    async function backfillTickerLatestFor(key12){
+      const addr = macPretty(key12);
+      const url = `${API_BASE}/${TAG_COLLECTION}?tag_address=${encodeURIComponent(addr)}&days=1&order=desc&limit=1`;
+      try{
+        const res  = await fetch(url, {mode:'cors'});
+        const data = await res.json().catch(()=>[]);
+        const rows = Array.isArray(data) ? data : (data.items||[]);
+        if (!rows.length) return;
+        const r  = rows[0];
+        const ts = pickTs(r) ?? Date.now();
+        const cur = devices.get(key12) || {};
+        devices.set(key12, { ...cur, error_code:(r.error_code ?? cur.error_code), ts });
+      }catch(e){}
+    }
+
+    async function backfillTickerAll(concurrency=4){
+      const ids = [...__ALLOWED_TAG_KEYS];
+      knownIds = ids.slice().sort();
+      window.knownIds = knownIds;
+
+      let idx = 0;
+      const workers = Array.from({length: Math.min(concurrency, ids.length)}, async ()=>{
+        while (idx < ids.length){
+          await backfillTickerLatestFor(ids[idx++]);
+        }
+      });
+      await Promise.all(workers);
+      window.updateTicker && window.updateTicker();
+    }
+
+    function handleWsMessage(raw){
+      try{
+        const msg   = JSON.parse(raw);
+        const rawId = msg.tag_address || msg.device_id || msg.id;
+        if (!rawId) return;
+
+        const k = macHex12(rawId);
+        if (!k) return;
+
+        if (__ALLOWED_READY && __ALLOWED_TAG_KEYS.size && !__ALLOWED_TAG_KEYS.has(k)) return;
+
+        if (!knownIds.includes(k)) { knownIds.push(k); knownIds.sort(); }
+
+        const prev = devices.get(k) || {};
+        const now  = Date.now();
+        const err  = (msg.error_code ?? prev.error_code);
+
+        devices.set(k, { ...prev, error_code: err, lastWsTs: now, ts: now });
+
+        // 🔧 [선택] 에러/경고 즉시 전광판에 푸시
+        if (err != null && typeof publishAlerts === 'function') {
+          publishAlerts(
+            [{ text: `태그 ${macPretty(k)} ${(+err===2?'에러':+err===1?'경고':'상태')}`, level: (+err===2?'error':'warn') }],
+            { mode:'append', broadcast:true }
+          );
+        }
+
+        window.updateTicker && window.updateTicker();
+      }catch(e){
+        console.error('WS parse error:', e, raw);
+      }
+    }
+
+
+    let ws, retry=0;
+    function connectWS(){
+      ws = new WebSocket(WS_URL);
+      ws.onopen = ()=>{ retry=0; };
+      ws.onmessage = (ev)=> handleWsMessage(ev.data);
+      ws.onclose = ()=> setTimeout(connectWS, Math.min(1000*(++retry), 10000));
+      ws.onerror = ()=> ws.close();
+    }
+
+
+    // ===== 이벤트 바인딩 =====
+    const normalize = s => String(s||'').trim().toLowerCase();
+    document.getElementById('search').addEventListener('input', (e)=>{
+      searchTerm = normalize(e.target.value);
+      renderTable();
+    });
+    document.getElementById('refresh-list').addEventListener('click', async ()=>{
+      await loadGatewayList();
+      await backfillAllGateways();
+    });
+
+    
+    function isAdmin(){ try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; } }
+    function currentEmail(){ try { return sessionStorage.getItem('app_user_email') || ''; } catch { return ''; } }
+    async function getIdToken(){
+      return new Promise(resolve=>{
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          const u = pool.getCurrentUser(); if (!u) return resolve('');
+          u.getSession((err,s)=>{ if(err||!s||!s.isValid()) return resolve(''); resolve(s.getIdToken().getJwtToken()); });
+        }catch{ resolve(''); }
+      });
+    }
+
+
+    // ===== 시작 =====
+    (async function(){
+      // 1) 허용목록(allow-list) 먼저
+      await fetchAllowedTagIdsFromServer();
+
+      // 2) 전광판(태그) 초기 채움
+      await loadTagList();
+      await backfillAllTags();
+
+      // 3) 게이트웨이 테이블
+      await loadGatewayList();
+      await backfillAllGateways();
+
+      // 4) 실시간
+      connectWS();
+
+      // 5) 허용목록 주기 갱신 + 전광판 리프레시
+      setInterval(async ()=>{
+        await fetchAllowedTagIdsFromServer();
+        window.SJUI?.TickerHub?.refreshFilter?.();
+        window.updateTicker && window.updateTicker();
+      }, 60_000);
+    })();
+  </script>
+</body>
+</html>

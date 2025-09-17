@@ -1,0 +1,24 @@
+<!-- login.html (수정) -->
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>SJIT BLE Tag 모니터링</title>
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <!-- <script src="aws-sdk.min.js"></script> -->
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+  <script src="main.js"></script>
+  <link rel="stylesheet" href="main.css">
+</head>
+<body>
+  <div class="container">
+    <p class="fsize">Login</p>
+    <input type="text" id="email" placeholder="Email" required>
+    <input type="password" id="password" placeholder="Password" required>
+    <!-- ★ main.js 안의 Login()을 호출 (이름 일치) -->
+    <input class="fsize_Login_button" type="button" value="Login" onclick="Login();">
+    <input type="button" value="Sign Up" onclick="window.location.href='signup.html';">
+  </div>
+</body>
+</html>

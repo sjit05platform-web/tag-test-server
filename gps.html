@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>GPS 위치 모니터링</title>
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; }
+    .leaflet-popup-content { line-height: 1.2; }
+    .toast {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,.7); color: #fff; padding: 6px 10px; border-radius: 6px;
+      font-family: Arial, sans-serif; font-size: 12px; z-index: 5000;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="toast" class="toast" style="display:none"></div>
+  <script src="alarm-capture.js"></script>
+  <script>
+    // ▼ MAC 정규화: "AA:BB..."든 "AABB..."든 -> "AABBCCDDEEFF"
+    function macKey(s){ return String(s||'').toUpperCase().replace(/[^0-9A-F]/g,''); }
+    // ▼ 표시용: "AABBCCDDEEFF" -> "AA:BB:CC:DD:EE:FF"
+    function macDisplay(k){ const h = macKey(k); return h.length===12 ? h.match(/.{2}/g).join(':') : h; }
+    const qs = new URLSearchParams(location.search);
+    const devicesParam = (qs.get('devices') || '').trim();
+    const allowed = new Set(
+      devicesParam
+        ? devicesParam.split(',').map(s => macKey(s)).filter(Boolean)
+        : []
+    );
+
+    // 지도 초기 위치(center=lat,lng)
+    let center = null;
+    const centerParam = qs.get('center');
+    if (centerParam) {
+      const [latStr, lngStr] = centerParam.split(',');
+      const lat = Number(latStr), lng = Number(lngStr);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) center = [lat, lng];
+    }
+
+    // index.html에서 넘긴 초기 값들
+    const initLat  = Number(qs.get('lat'));
+    const initLng  = Number(qs.get('lng'));
+    const initTs   = Number(qs.get('ts'));   // epoch(초/밀리초) 가능
+    const initTemp = qs.get('temp');         // 문자열/숫자 그대로
+    const initBattery = qs.get('battery');   // 문자열/숫자 그대로
+
+    console.log('[gps] allowed=', [...allowed], 'center=', center, 'init=', initLat, initLng, initTs, initTemp, initBattery);
+
+    // 지도 생성
+    const DEFAULT_CENTER = center || [37.5665, 126.9780];
+    const map = L.map('map').setView(DEFAULT_CENTER, center ? 15 : 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const markers = new Map();
+    let didFirstMarkerFit = false;
+    let gotMessage = false;
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg; el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 4000);
+    }
+
+    // YYYY-MM-DD HH:mm:ss (KST)
+    function formatDateTimeKST(ts) {
+      let d;
+      if (typeof ts === 'number') {
+        d = (ts < 1e12) ? new Date(ts * 1000) : new Date(ts);
+      } else if (typeof ts === 'string' && /^\d+$/.test(ts)) {
+        const n = Number(ts);
+        d = (ts.length === 10) ? new Date(n * 1000) : (ts.length === 13) ? new Date(n) : new Date(n);
+      } else {
+        d = new Date(ts);
+      }
+      const kst = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+      const yyyy = kst.getFullYear();
+      const mm = String(kst.getMonth() + 1).padStart(2, '0');
+      const dd = String(kst.getDate()).padStart(2, '0');
+      const hh = String(kst.getHours()).padStart(2, '0');
+      const mi = String(kst.getMinutes()).padStart(2, '0');
+      const ss = String(kst.getSeconds()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+    }
+
+    function renderPopup(d, lat, lng) {
+      const lines = [];
+      lines.push(`<b>${macDisplay(d.tag_address ?? 'unknown')}</b>`);
+      lines.push(`📍 ${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+
+      // 숫자 timestamp 우선 변환, 없으면 timestamp_text 문자열 사용
+      if (d.timestamp !== undefined && d.timestamp !== null && d.timestamp !== '') {
+        lines.push(`🕒 ${formatDateTimeKST(Number(d.timestamp))}`);
+      } else if (d.timestamp_text) {
+        lines.push(`🕒 ${d.timestamp_text}`);
+      }
+
+      if (d.temperature !== undefined) lines.push(`🌡 ${d.temperature}`);
+      if (d.humidity !== undefined)    lines.push(`💧 ${d.humidity}`);
+      if (d.battery !== undefined)     lines.push(`🔋 ${d.battery}`);
+      return lines.join('<br>');
+    }
+
+    function fitToMarkers() {
+      const latlngs = Array.from(markers.values()).map(m => m.getLatLng());
+      if (!latlngs.length) return;
+      const bounds = L.latLngBounds(latlngs);
+      map.fitBounds(bounds.pad(0.2), { animate: true });
+    }
+
+    function upsertMarker(device) {
+      const id = macKey(device.tag_address ?? device.device_id ?? device.id ?? 'unknown');
+      const label = macDisplay(id);
+      const lat = Number(device.latitude ?? device.lat);
+      const lng = Number(device.longitude ?? device.lng ?? device.lon);
+
+      console.log('[gps] upsertMarker id=', id, 'lat=', lat, 'lng=', lng);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        console.warn('[gps] invalid coords:', device); return;
+      }
+
+      device.tag_address = label;
+      if (markers.has(id)) {
+        markers.get(id).setLatLng([lat, lng]).setPopupContent(renderPopup(device, lat, lng));
+      } else {
+        const m = L.marker([lat, lng]).addTo(map).bindPopup(renderPopup(device, lat, lng));
+        markers.set(id, m);
+      }
+
+      if (!didFirstMarkerFit) { fitToMarkers(); didFirstMarkerFit = true; }
+      else { map.setView([lat, lng], 16); }
+    }
+
+    // 1) index.html에서 넘어온 초기 값으로 즉시 마커 표시
+    if (Number.isFinite(initLat) && Number.isFinite(initLng)) {
+      const initialId = allowed.size ? Array.from(allowed)[0] : 'manual';
+      const initPayload = { tag_address: macDisplay(initialId), latitude: initLat, longitude: initLng };
+      if (Number.isFinite(initTs))  initPayload.timestamp = initTs;
+      if (initTemp !== null)        initPayload.temperature = isNaN(Number(initTemp)) ? initTemp : Number(initTemp);
+      if (initBattery !== null)        initPayload.battery = isNaN(Number(initBattery)) ? initBattery : Number(initBattery);
+
+      upsertMarker(initPayload);
+    } else if (center) {
+      const initialId = allowed.size ? Array.from(allowed)[0] : 'manual';
+      upsertMarker({ tag_address: initialId, latitude: center[0], longitude: center[1] });
+    }
+
+    // 2) 이후 실시간 갱신 (WebSocket)
+    const WS_URL = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const socket = new WebSocket(WS_URL);
+    socket.onopen  = () => console.log("WebSocket 연결 성공(gps)");
+    socket.onclose = () => console.log("WebSocket 연결 종료(gps)");
+    socket.onerror = (e) => console.error("WebSocket 오류(gps):", e);
+
+    socket.onmessage = (event) => {
+      let data;
+      try { data = JSON.parse(event.data); }
+      catch (e) { console.warn('[gps] JSON parse fail:', event.data); return; }
+
+      console.log('[gps] recv:', data);
+      gotMessage = true;
+
+      const recvId = macKey(data.tag_address ?? data.device_id ?? data.id ?? '');
+      if (allowed.size && !allowed.has(recvId)) {
+        console.log('[gps] skipped by filter. allowed=', [...allowed], 'recvId=', recvId);
+        return;
+      }
+
+      const hasLat = data.latitude !== undefined || data.lat !== undefined;
+      const hasLng = data.longitude !== undefined || data.lng !== undefined || data.lon !== undefined;
+      if (!hasLat || !hasLng) {
+        console.warn('[gps] no coords in message; data=', data); return;
+      }
+
+      upsertMarker(data);
+    };
+
+    setTimeout(() => {
+      if (!gotMessage) {
+        showToast('아직 실시간 메시지가 들어오지 않았습니다. (초기 값만 표시 중)');
+        console.log('[gps] no messages for 10s after open');
+      }
+    }, 10000);
+  </script>
+</body>
+</html>

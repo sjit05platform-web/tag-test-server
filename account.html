@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <style> html.auth-check { visibility: hidden } </style>
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Account Settings</title>
+
+  <!-- Cognito preset -->
+  <script>
+    document.documentElement.classList.add('auth-check');
+    window.__LOGIN_PAGE__ = 'login.html';
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft',
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota',
+    };
+    window.__API__ = {
+      API_BASE: "https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev",
+      COLLECTION_PATH: "calculated_locations",
+      WS_URL: "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev",
+      ALLOWED_API: "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed",
+      REGISTER_API: "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag",
+      ACCOUNTS_API: "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/get-forest-tag"
+    };
+  </script>
+  <script>
+    window.__ALLOWED_TAG_IDS = [];
+    window.__ALLOWED_READY   = false;
+  </script>
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <!-- Auth guard -->
+  <script>
+    (function authGuard() {
+      function goLogin() {
+        const u = new URL(window.__LOGIN_PAGE__, location.href);
+        u.searchParams.set('redirect', location.href);
+        location.replace(u.toString());
+      }
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity){ return setTimeout(waitLib, 20); }
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          if (!sessionStorage.getItem('app_session')) {
+            const u = pool.getCurrentUser();
+            if (u) { try { u.signOut(); } catch(e){} }
+            return goLogin();
+          }
+          const user = pool.getCurrentUser();
+          if (!user) return goLogin();
+          user.getSession(function(err, session){
+            if (err || !session || !session.isValid()) return goLogin();
+            try {
+              const groups = (session.getIdToken().payload || {})['cognito:groups'] || [];
+              sessionStorage.setItem('app_is_admin', groups.includes('admin') ? '1' : '0');
+            } catch {}
+            document.documentElement.classList.remove('auth-check');
+            user.getUserAttributes(function(e, attrs){
+              let email = (typeof user.getUsername === 'function') ? user.getUsername() : '';
+              if (!e && Array.isArray(attrs)) {
+                const em = attrs.find(a => (a.getName && a.getName()==='email') || a?.Name==='email');
+                if (em) email = (em.getValue ? em.getValue() : em.Value);
+              }
+              try { sessionStorage.setItem('app_user_email', email); } catch {}
+              try { window.__showSidebarGreet && window.__showSidebarGreet(email); } catch {}
+            });
+          });
+        }catch(e){ goLogin(); }
+      })();
+    })();
+  </script>
+
+  <!-- Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+
+  <!-- Common UI -->
+  <link rel="stylesheet" href="./ui-common.css" />
+  <style> body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc} </style>
+
+  <!-- (선택) 계정 트리 라인 스타일 -->
+  <style id="acct-tree-lines-css">
+    #acct-tree ul.tree-ul{ list-style:none; margin:0; padding-left:22px; position:relative; }
+    #acct-tree ul.tree-ul:before{ content:""; position:absolute; left:10px; top:0; bottom:0; border-left:1px solid #e5e7eb; }
+    #acct-tree li.tree-li{ position:relative; }
+    #acct-tree li.tree-li:before{ content:""; position:absolute; left:-12px; top:16px; width:22px; border-top:1px solid #e5e7eb; }
+  </style>
+</head>
+
+<body>
+  <div class="sj-shell">
+    <aside class="sj-sidebar" data-sj-sidebar></aside>
+    <main class="sj-main">
+      <header class="sj-header">
+        <div class="sj-title text-sm">계정 설정</div>
+        <div data-sj-rotator id="hdr-rotator" class="w-[240px] sm:w-[320px] md:w-[480px]"></div>
+      </header>
+
+      <section class="p-6 max-w-3xl mx-auto">
+        <h2 class="text-xl font-bold mb-4">팀 계정 선택</h2>
+        <section id="account-tree-section" class="bg-white rounded-lg border shadow-sm p-4 mb-6">
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <div class="text-sm font-bold text-gray-700">팀 계정 트리</div>
+              <div class="text-xs text-gray-500">원하는 계정을 선택하면 <b>즉시 저장</b>됩니다.</div>
+            </div>
+            <div class="flex items-center gap-2 text-xs">
+              <button id="acct-expand-all" class="px-2 py-1 border rounded bg-white hover:bg-gray-50">전체 펼치기</button>
+              <button id="acct-collapse-all" class="px-2 py-1 border rounded bg-white hover:bg-gray-50">전체 접기</button>
+            </div>
+          </div>
+
+          <div class="text-xs text-gray-600 mb-3">선택 팀 계정: <span id="acct-picked" class="font-semibold">(미선택)</span></div>
+          <div id="acct-tree" class="border rounded-lg p-2 max-h-96 overflow-auto"></div>
+
+          <div class="flex items-center gap-2 mt-3">
+            <span id="acct-status" class="text-xs text-gray-500"></span>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Sidebar 구성 -->
+  <script>
+    window.__SJ_SIDEBAR__ = {
+      logo: { text: 'Tag Monitor', href: 'design.html', version: 'v0.1', subtext: 'SJIT · Dashboard' },
+      search: false,
+      sections: [
+        { title: 'Main', items: [
+          { icon: 'ri-time-line',         label: '실시간 대시보드', href: 'design.html',  activeMatch: 'design.html' },
+          { icon: 'ri-device-line',       label: '디바이스 상세',   href: 'detail.html',  activeMatch: 'detail.html' },
+          { icon: 'ri-price-tag-3-line',  label: '태그',            href: 'tag.html',     activeMatch: 'tag.html' },
+          { icon: 'ri-rfid-line',         label: '게이트웨이',      href: 'gateway.html', activeMatch: 'gateway.html' },
+          { icon: 'ri-alarm-warning-line',label: '알람',            href: 'alarm.html',   activeMatch: 'alarm.html' },
+          { icon: 'ri-settings-3-line',   label: '설정',            href: 'setting.html', activeMatch: 'setting.html' },
+          // { icon: 'ri-user-settings-line',label: '계정 설정',       href: 'account.html', activeMatch: 'account.html' }
+        ] }
+      ],
+      initiallyOpen: false
+    };
+  </script>
+
+  <!-- Common UI (로테이터 포함) -->
+  <script type="module" src="./ui-common.js"></script>
+
+  <!-- 계정 트리 선택 로직 (버튼 없이 즉시 저장) -->
+  <script>
+    (function AccountTreeSelector(){
+      const REGISTER_API = window.__API__?.REGISTER_API;
+      const ACCOUNTS_API = window.__API__?.ACCOUNTS_API || (window.__API__?.API_BASE + '/user-accounts');
+
+      const $tree   = document.getElementById('acct-tree');
+      const $picked = document.getElementById('acct-picked');
+      const $status = document.getElementById('acct-status');
+
+      let flat=[], map=new Map(), roots=[];
+      let pickedId = undefined;   // undefined: 미선택, null: 루트, string: 계정ID
+      let blocked = new Set();     // 자기 자신/자손 금지
+
+      function isAdmin(){
+        try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; }
+      }
+      function currentUser(){
+        try{
+          const el = document.getElementById('sidebar-greet-name');
+          const txt = (el && el.textContent) ? el.textContent.trim() : '';
+          return txt || sessionStorage.getItem('app_user_email') || '';
+        }catch{ return ''; }
+      }
+      function setStatus(msg, ok=true){
+        if (!$status) return;
+        $status.textContent = msg || '';
+        $status.style.color = ok ? '#4b5563' : '#b91c1c';
+      }
+      function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+
+      function buildTree(){
+        map = new Map();
+        flat.forEach(n => map.set(n.accountId, { ...n, id:n.accountId, name:n.name||n.accountId, children:[] }));
+        roots = [];
+        map.forEach(node => {
+          const p = node.parentId;
+          if (p && map.has(p)) map.get(p).children.push(node); else roots.push(node);
+        });
+      }
+      function getPathToRoot(id){
+        const out=[]; let cur=map.get(id);
+        while(cur){ out.push(cur); cur = cur.parentId ? map.get(cur.parentId) : null; }
+        return out.reverse();
+      }
+      function collectDescendants(rootId){
+        const s=new Set([rootId]); const st=[rootId];
+        while(st.length){
+          const id=st.pop(); const n=map.get(id); if(!n) continue;
+          for(const c of n.children){ if(!s.has(c.accountId)){ s.add(c.accountId); st.push(c.accountId); } }
+        }
+        return s;
+      }
+      function updatePickedLabel(){
+        if (pickedId===null){ $picked.textContent='(루트)'; return; }
+        if (!pickedId){ $picked.textContent='(미선택)'; return; }
+        const path = getPathToRoot(pickedId).map(n=>n.name).join(' / ');
+        $picked.textContent = path || pickedId;
+      }
+      function render(){
+        $tree.innerHTML='';
+
+        // 관리자에게만 (루트) 노드 노출
+        if (isAdmin()) {
+          const rootRow = document.createElement('div');
+          rootRow.className='flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50';
+          rootRow.innerHTML='<span class="text-gray-500">(루트)</span>';
+          const rootBtn=document.createElement('button');
+          rootBtn.className='ml-auto px-2 py-1 border rounded bg-white hover:bg-gray-50 text-xs';
+          rootBtn.textContent = (pickedId===null?'Selected':'Choose');
+          rootBtn.onclick = ()=>{ pickedId=null; updatePickedLabel(); render(); save(true); };
+          rootRow.appendChild(rootBtn);
+          $tree.appendChild(rootRow);
+        }
+
+        const ul=document.createElement('ul'); ul.className='tree-ul';
+        for(const r of roots.sort((a,b)=> (a.depth-b.depth) || a.name.localeCompare(b.name))){
+          ul.appendChild(renderNode(r));
+        }
+        $tree.appendChild(ul);
+      }
+      function renderNode(node){
+        const li=document.createElement('li'); li.className='tree-li';
+        const hasKids = node.children && node.children.length;
+        const details=document.createElement('details'); details.open = node.depth<=1;
+        const summary=document.createElement('summary'); summary.style.listStyle='none';
+
+        const row=document.createElement('div');
+        const isPicked = pickedId===node.accountId;
+        const isBlocked = blocked.has(node.accountId);
+        row.className = 'row flex items-center gap-2 px-2 py-1 rounded '
+                      + (isPicked?'outline outline-2 outline-green-200 bg-green-50 ':'hover:bg-gray-50 ')
+                      + (isBlocked?'opacity-50':'');
+
+        const caret=document.createElement('span'); caret.className='caret w-4 text-gray-500';
+        caret.textContent = hasKids ? (details.open?'▾':'▸') : '';
+        details.addEventListener('toggle', ()=> caret.textContent = hasKids ? (details.open?'▾':'▸') : '');
+
+        const label=document.createElement('span');
+        label.innerHTML = `<span class="font-medium">${esc(node.name)}</span> <span class="text-xs text-gray-500">${esc(node.accountId)}</span>`;
+
+        const choose=document.createElement('button');
+        choose.className='ml-auto px-2 py-1 border rounded bg-white hover:bg-gray-50 text-xs';
+        choose.textContent = isPicked ? 'Selected' : (isBlocked ? 'Not allowed' : 'Choose');
+        choose.disabled = !!isBlocked;
+        choose.onclick = (e)=>{ e.stopPropagation(); pickedId=node.accountId; updatePickedLabel(); render(); save(true); };
+
+        row.appendChild(caret); row.appendChild(label); row.appendChild(choose);
+        summary.appendChild(row); details.appendChild(summary);
+
+        if (hasKids){
+          const ul=document.createElement('ul'); ul.className='tree-ul';
+          for(const c of node.children.sort((a,b)=> (a.depth-b.depth) || a.name.localeCompare(b.name))){
+            ul.appendChild(renderNode(c));
+          }
+          details.appendChild(ul);
+        }
+        li.appendChild(details);
+        return li;
+      }
+
+      async function getIdTokenForTree(){
+        return new Promise(resolve=>{
+          try{
+            const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+            const u = pool.getCurrentUser();
+            if(!u) return resolve('');
+            u.getSession((err,s)=>{
+              if(err || !s || !s.isValid()) return resolve('');
+              resolve(s.getIdToken().getJwtToken());
+            });
+          }catch{ resolve(''); }
+        });
+      }
+
+      async function loadForest(){
+        const me = currentUser();
+        const u = new URL(ACCOUNTS_API); u.searchParams.set('mode','forest');
+        let res, data;
+        try{ res = await fetch(u, { method:'GET', mode:'cors' }); data = await res.json(); }
+        catch(e){ setStatus('네트워크 오류: ' + (e?.message || e), false); return; }
+        if(!res.ok){ setStatus(`계정 목록 오류: HTTP ${res.status}`, false); return; }
+
+        flat=[];
+        const flatten=(node, parentId=null, depth=0, rootId=null)=>{
+          if(!node) return; const id=node.accountId; const rid=rootId??id;
+          flat.push({accountId:id, parentId, rootParentId:rid, depth, name: node.name||id});
+          const kids=Array.isArray(node.children)?node.children:[];
+          for(const c of kids) flatten(c, id, depth+1, rid);
+        };
+        for(const r of data) flatten(r, null, 0, null);
+
+        buildTree();
+
+        const meNode = map.get(me);
+        if (meNode) { pickedId = meNode.parentId ?? null; blocked = collectDescendants(me); }
+        else { pickedId = undefined; blocked = new Set(); }
+
+        updatePickedLabel(); render(); setStatus('');
+      }
+
+      async function save(auto=false){
+        const me = currentUser(); if (!me){ alert('로그인 정보가 없습니다.'); return; }
+        if (pickedId!==null && blocked.has(pickedId)){ alert('자기 자신 또는 자손을 부모로 지정할 수 없습니다.'); return; }
+        try{
+          setStatus(auto ? '선택 저장 중…' : '저장 중…');
+          const token = await getIdTokenForTree();
+          const payload = { user_id: me, parent_id: pickedId ?? null };
+          const res = await fetch(REGISTER_API, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {})},
+            body: JSON.stringify(payload)
+          });
+          const txt = await res.text(); let j={}; try{ j=JSON.parse(txt);}catch{}
+          if (!res.ok) throw new Error(j.error || txt || `HTTP ${res.status}`);
+          setStatus('부모 설정이 완료되었습니다.');
+        }catch(e){ setStatus('오류: ' + (e?.message || e), false); }
+      }
+
+      document.getElementById('acct-expand-all')?.addEventListener('click', ()=>{ document.querySelectorAll('#acct-tree details').forEach(d=> d.open=true); });
+      document.getElementById('acct-collapse-all')?.addEventListener('click', ()=>{ document.querySelectorAll('#acct-tree details').forEach(d=> d.open=false); });
+
+      loadForest();
+    })();
+  </script>
+
+  <script type="module">
+  import {
+    buildTickerTextsFromDevices,
+    publishAlerts,
+    subscribeTickerFromOthers,
+  } from './ticker-common.js';
+
+  const { API_BASE, COLLECTION_PATH, WS_URL, ALLOWED_API: ALLOWED_URL } = window.__API__;
+  const ACTIVE_MS = 60_000;
+
+  // --- 공통 유틸 ---
+  const toNum = v => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+  const macHex12 = raw => {
+    const s = String(raw||'').toUpperCase().replace(/[^0-9A-F]/g,'');
+    return /^[0-9A-F]{12}$/.test(s) ? s : null;
+  };
+  const macDisplay = rawOrKey => {
+    const k = macHex12(rawOrKey);
+    return k ? k.match(/.{2}/g).join(':') : String(rawOrKey||'');
+  };
+  const pickTs = x => {
+    let t = toNum(x.timestamp ?? x.ts ?? x.timestamp_epoch ?? x.raw_time ?? x.time);
+    if (t==null) return null;
+    return (t < 1e12) ? t*1000 : t;
+  };
+
+  // --- Cognito 토큰 보장 ---
+  async function getIdTokenOnce(){
+    return new Promise(resolve=>{
+      try{
+        const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+        const u = pool.getCurrentUser();
+        if (!u) return resolve('');
+        u.getSession((err,s)=>{
+          if (err || !s || !s.isValid()) return resolve('');
+          resolve(s.getIdToken().getJwtToken());
+        });
+      }catch{ resolve(''); }
+    });
+  }
+  async function requireIdToken(maxWaitMs=8000){
+    const started = Date.now();
+    // 세션이 붙을 때까지 잠깐 폴링
+    while (Date.now()-started < maxWaitMs){
+      const tok = await getIdTokenOnce();
+      if (tok) return tok;
+      await new Promise(r=>setTimeout(r, 150));
+    }
+    throw new Error('Cognito ID token not available yet');
+  }
+
+  // --- 상태 ---
+  const devices = new Map();
+  let knownIds = [];
+  const allowedSet = new Set();
+
+  /* ▼▼ 전광판 허브 게이트: 허용 태그 기준 필터(탭별 적용, 방송은 그대로) ▼▼ */
+  (function installTickerGate(){
+    // 12HEX 키로 정규화
+    function hex12(s){
+      if (!s) return null;
+      const up = String(s).toUpperCase();
+      const noSep = up.replace(/[^0-9A-F]/g, '');
+      return /^[0-9A-F]{12}$/.test(noSep) ? noSep : null;
+    }
+
+    // 알림 항목에서 태그ID 후보 추출: 객체 필드(tagId/tags) → 텍스트(콜론/연속 12HEX)
+    function extractIds(alert){
+      const ids = new Set();
+      if (alert && typeof alert === 'object'){
+        if (alert.tagId){ const k = hex12(alert.tagId); if (k) ids.add(k); }
+        if (Array.isArray(alert.tags)){
+          for (const t of alert.tags){ const k = hex12(t); if (k) ids.add(k); }
+        }
+      }
+      const text = typeof alert === 'string' ? alert : (alert?.text || '');
+      if (text){
+        const rx = /(?:[0-9A-F]{2}:){5}[0-9A-F]{2}|[0-9A-F]{12}/gi;
+        let m;
+        while ((m = rx.exec(text))){
+          const k = hex12(m[0]);
+          if (k) ids.add(k);
+        }
+      }
+      return [...ids];
+    }
+
+    // 허용 태그만 통과. 태그가 전혀 언급되지 않은 일반 문구는 그대로 통과.
+    function filterAlerts(alerts){
+      const arr = Array.isArray(alerts) ? alerts : [alerts];
+      return arr.filter(a => {
+        const ids = extractIds(a);
+        if (!ids.length) return true;                 // 요약/일반 문구는 표시
+        for (const id of ids) if (allowedSet.has(id)) // 내 세션 허용목록에 하나라도 있으면 표시
+          return true;
+        return false;                                 // 전부 불허면 숨김
+      });
+    }
+
+    // 허브 패치(지연 로딩 대비)
+    function tryPatch(){
+      const hub = window.SJUI && window.SJUI.TickerHub;
+      if (!hub || !hub.setAlerts){
+        setTimeout(tryPatch, 30);
+        return;
+      }
+      if (hub.__allowGatePatched) return;
+
+      const origSet = hub.setAlerts.bind(hub);
+      hub.setAlerts = function(alerts, ...rest){
+        try { alerts = filterAlerts(alerts); } catch {}
+        return origSet(alerts, ...rest);
+      };
+      hub.__allowGatePatched = true;
+    }
+    tryPatch();
+  })();
+
+
+  // 다른 탭에서 보내는 브로드캐스트도 수신
+  subscribeTickerFromOthers();
+
+  // 헤더 로테이터 보장 장착(타이밍용)
+  (function ensureMount(){
+    if (!window.SJUI || !window.SJUI.mountRotators) return setTimeout(ensureMount, 20);
+    window.SJUI.mountRotators();
+  })();
+
+  function updateTicker() {
+    const texts = buildTickerTextsFromDevices({
+      devicesMap: devices,
+      ids:        knownIds,
+      activeMs:   ACTIVE_MS,
+    });
+    publishAlerts(texts.map(t => ({ text: t, level: 'info' })), { mode:'replace', staggerMs:1200, broadcast:true });
+  }
+  window.updateTicker = updateTicker;
+
+  async function fetchAllowedTagIdsFromServer(token){
+    // 토큰이 없으면 호출하지 않음(403 방지)
+    if (!token) throw new Error('No ID token');
+    const me = (sessionStorage.getItem('app_user_email') || '');
+    if (!me) return [];
+    const url = new URL(ALLOWED_URL);
+    const isAdmin = (sessionStorage.getItem('app_is_admin') === '1');
+    url.searchParams.set('user_id', me);
+    url.searchParams.set('scope', isAdmin ? 'all' : 'descendants');
+    url.searchParams.set('include_owner', '1');
+
+    const res  = await fetch(url.toString(), {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` },
+      mode: 'cors'
+    });
+    const data = await res.json().catch(()=> ({}));
+    if (!res.ok || !Array.isArray(data.tags)) {
+      console.warn('[allowed] HTTP', res.status, data);
+      return [];
+    }
+    const ids = [];
+    for (const t of data.tags){
+      const raw = (typeof t==='string') ? t : (t.tag_mac || t.id || t.mac || t.tagMac || '');
+      const k = macHex12(raw);
+      if (k) ids.push(k);
+    }
+    return [...new Set(ids)];
+  }
+
+  async function loadLatestForAllowed(){
+    const ids = knownIds.slice();
+    const limit = 1;
+    const jobs = ids.map(async (idKey)=>{
+      const tagAddrParam = macDisplay(idKey);
+      const url = `${API_BASE}/${COLLECTION_PATH}?tag_address=${encodeURIComponent(tagAddrParam)}&days=1&order=desc&limit=${limit}`;
+      try{
+        const res = await fetch(url, {mode:'cors'});
+        const data = await res.json().catch(()=> []);
+        const rows = Array.isArray(data) ? data : (data.items || []);
+        const it = rows[0];
+        if (!it) { if (!devices.has(idKey)) devices.set(idKey, { id: idKey }); return; }
+        const ts = pickTs(it);
+        const temp = toNum(it.temperature ?? it.temp);
+        const batt = toNum(it.battery_voltage ?? it.battery);
+        devices.set(idKey, {
+          ...(devices.get(idKey) || { id: idKey }),
+          temperature: temp,
+          battery_voltage: batt,
+          error_code: it.error_code ?? null,
+          send_type:  it.send_type  ?? null,
+          ts
+        });
+      }catch(e){
+        console.warn('[latest] fail for', idKey, e);
+        if (!devices.has(idKey)) devices.set(idKey, { id: idKey });
+      }
+    });
+    await Promise.all(jobs);
+  }
+
+  function handleMessage(raw){
+    try{
+      const msg = JSON.parse(raw);
+      const idRaw = msg.tag_address || msg.device_id || msg.id;
+      const key = macHex12(idRaw);
+      if (!idRaw || !key) return;
+
+      const isAdmin = (sessionStorage.getItem('app_is_admin') === '1');
+      if (!isAdmin && !allowedSet.has(key)) return;
+
+      const temp = toNum(msg.temperature);
+      const batt = (msg.battery_voltage!=null) ? toNum(msg.battery_voltage)
+                  : (msg.battery!=null ? toNum(msg.battery) : null);
+      const lat  = toNum(msg.latitude);
+      const lng  = toNum(msg.longitude);
+      const tsRaw = toNum(msg.timestamp ?? msg.time ?? msg.ts ?? msg.timestamp_epoch) ?? Date.now();
+      const ts = tsRaw < 1e12 ? tsRaw*1000 : tsRaw;
+
+      const prev = devices.get(key) || { id: key };
+      devices.set(key, {
+        ...prev,
+        temperature: (temp ?? prev.temperature),
+        battery_voltage: (batt ?? prev.battery_voltage),
+        lat: (lat ?? prev.lat),
+        lng: (lng ?? prev.lng),
+        error_code: (msg.error_code ?? prev.error_code),
+        send_type:  (msg.send_type  ?? prev.send_type),
+        ts
+      });
+
+      updateTicker();
+    }catch(e){
+      // ignore parse error
+    }
+  }
+
+  let ws, retry=0;
+  function connectWS(){
+    try{
+      ws = new WebSocket(WS_URL);
+      ws.onopen = ()=>{ retry=0; };
+      ws.onmessage = (ev)=> handleMessage(ev.data);
+      ws.onclose = ()=> setTimeout(connectWS, Math.min(1000*(++retry), 10000));
+      ws.onerror = ()=> { try{ ws.close(); }catch{} };
+    }catch(e){
+      console.warn('WS failed', e);
+    }
+  }
+
+  async function refreshAll(token){
+    knownIds = await fetchAllowedTagIdsFromServer(token).catch(e=>{ console.warn(e); return []; });
+    allowedSet.clear();
+    for (const k of knownIds) allowedSet.add(k);
+
+    window.__ALLOWED_TAG_IDS = knownIds.slice();
+    window.__ALLOWED_READY   = true;
+    window.SJUI?.TickerHub?.refreshFilter?.();
+
+    if (knownIds.length) await loadLatestForAllowed();
+    else devices.clear();
+    updateTicker();
+  }
+
+  // ===== 시작 순서: "토큰 확보" 후 초기화 =====
+  try{
+    const token = await requireIdToken();     // ★ 여기서 토큰 보장
+    await refreshAll(token);
+    connectWS();
+    setInterval(()=> requireIdToken().then(refreshAll).catch(()=>{}), 10_000);
+  }catch(e){
+    console.error('[Ticker init] token error:', e);
+    // 토큰이 없어도 표시만 하고 싶다면 최소한의 빈 메시지 장착
+    publishAlerts([{ text:'로그인 토큰 준비 중…', level:'info' }], { mode:'replace', broadcast:false });
+  }
+</script>
+
+</body>
+</html>

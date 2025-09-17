@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <!-- ▼▼▼ 보호 페이지 공통: <head> 맨 위에 넣기 ▼▼▼ -->
+  <meta charset="UTF-8" />
+  <style>
+    html.auth-check { visibility: hidden }
+  </style>
+
+  <script>
+    // UI 깜빡임 방지: 인증 끝날 때까지 숨김
+    document.documentElement.classList.add('auth-check');
+
+    // 로그인 페이지 경로 (필요시 상대경로 조정)
+    window.__LOGIN_PAGE__ = 'login.html';
+
+    // Cognito User Pool 설정
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft', // ← 실제 값
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota', // ← 실제 값
+    };
+  </script>
+
+  <!-- Cognito SDK들 (순서 중요) -->
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <!-- 인증 가드 -->
+  <script>
+    (function authGuard() {
+      function goLogin() {
+        const u = new URL(window.__LOGIN_PAGE__, location.href);
+        u.searchParams.set('redirect', location.href); // 로그인 후 돌아올 곳
+        location.replace(u.toString());
+      }
+
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity){ return setTimeout(waitLib, 20); }
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+
+          // 🔸 브라우저 세션 플래그가 없으면 강제 재로그인
+          if (!sessionStorage.getItem('app_session')) {
+            const u = pool.getCurrentUser();
+            if (u) { try { u.signOut(); } catch(e){} }
+            return goLogin();
+          }
+
+          const user = pool.getCurrentUser();
+          if (!user) return goLogin();
+
+          user.getSession(function(err, session){
+            if (err || !session || !session.isValid()) return goLogin();
+
+            try {
+              const groups = (session.getIdToken().payload || {})['cognito:groups'] || [];
+              sessionStorage.setItem('app_is_admin', groups.includes('admin') ? '1' : '0');
+            } catch {}
+
+            // 페이지 표시
+            document.documentElement.classList.remove('auth-check');
+
+            // ✅ 이메일 저장 + 즉시 표시 시도(요소가 있으면만)
+            user.getUserAttributes(function(e, attrs){
+              let email = (typeof user.getUsername === 'function') ? user.getUsername() : '';
+              if (!e && Array.isArray(attrs)) {
+                const em = attrs.find(a => (a.getName && a.getName() === 'email') || a?.Name === 'email');
+                if (em) email = (em.getValue ? em.getValue() : em.Value);
+              }
+              try { sessionStorage.setItem('app_user_email', email); } catch {}
+              const box  = document.getElementById('sidebar-greet');
+              const name = document.getElementById('sidebar-greet-name');
+              if (box && name) { name.textContent = email || ''; box.classList.remove('hidden'); }
+            });
+          });
+        }catch(e){ goLogin(); }
+      })();
+    })();
+  </script>
+  <!-- ▲▲▲ 여기까지가 '무조건 로그인 먼저' 가드 ▲▲▲ -->
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tag Monitor</title>
+
+  <!-- 아이콘/폰트/유틸 -->
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { primary:'#1E88E5', secondary:'#F5F6FA' },
+          borderRadius: {
+            'none':'0px','sm':'4px', DEFAULT:'8px','md':'12px','lg':'16px',
+            'xl':'20px','2xl':'24px','3xl':'32px','full':'9999px','button':'8px'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- ECharts -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
+
+  <!-- ★ 공통 UI CSS -->
+  <link rel="stylesheet" href="./ui-common.css" />
+
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc}
+    .mono{font-family:'Roboto Mono',monospace}
+  </style>
+</head>
+
+<body>
+  <!-- ★ 공통 레이아웃(sj-shell) + 사이드바/메인 -->
+  <div class="sj-shell">
+    <!-- 공통 사이드바: 자동 렌더 -->
+    <aside class="sj-sidebar" data-sj-sidebar></aside>
+
+    <!-- 메인 -->
+    <main class="sj-main">
+      <!-- 공통형 헤더 -->
+      <header class="sj-header">
+        <div class="sj-title text-sm">
+          
+        </div>
+
+        <!-- ★ 전광판(공통 로테이터) -->
+        <div data-sj-rotator id="hdr-rotator" class="w-[240px] sm:w-[320px] md:w-[480px]"></div>
+      </header>
+
+      <!-- 페이지 콘텐츠 -->
+      <section class="p-6">
+        <div class="mb-6">
+          <h2 class="text-xl font-bold text-gray-800">실시간 대시보드</h2>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8" id="realtime-panel">
+          <!-- 디바이스 목록 -->
+          <div class="bg-white rounded-lg shadow-sm p-6">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-base font-medium text-gray-800">디바이스 목록 (tag_address)</h3>
+              <span id="rt-count" class="text-xs text-gray-500"></span>
+            </div>
+            <div id="rt-device-list" class="space-y-2 h-80 overflow-y-auto"></div>
+          </div>
+
+          <!-- 상세 카드 3열 (온도 / 배터리 / 에러·전송) -->
+          <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- 온도 -->
+            <div class="bg-white rounded-lg shadow-sm p-4">
+              <div class="text-xs text-gray-600" id="rt-tempLabel">온도 데이터 : —</div>
+              <div class="text-xl font-bold mt-1" id="rt-tempState">—</div>
+            </div>
+            <!-- 배터리 -->
+            <div class="bg-white rounded-lg shadow-sm p-4">
+              <div class="text-xs text-gray-600" id="rt-battLabel">배터리 : —</div>
+              <div class="text-xl font-bold mt-1" id="rt-battState">—</div>
+            </div>
+            <!-- 에러/전송 상태 -->
+            <div class="bg-white rounded-lg shadow-sm p-4">
+              <div class="text-xs text-gray-600">에러/전송 상태</div>
+              <div class="mt-2 flex items-center gap-2">
+                <span id="rt-errorState" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">—</span>
+                <span class="text-xs text-gray-400">코드: <span id="rt-errorCode" class="mono font-medium">—</span></span>
+              </div>
+              <div class="text-xs text-gray-600 mt-2">전송 유형: <span id="rt-sendType" class="mono font-medium">—</span></div>
+            </div>
+
+            <!-- 위치 -->
+            <div class="bg-white rounded-lg shadow-sm p-6 md:col-span-2">
+              <div class="text-sm text-gray-600">위치</div>
+              <div class="text-xl mt-2 font-mono" id="rt-location">—</div>
+              <button id="open-map" class="mt-4 px-3 py-2 text-sm text-white bg-primary rounded-lg disabled:opacity-50" disabled>지도에서 보기</button>
+            </div>
+            <!-- 마지막 갱신 -->
+            <div class="bg-white rounded-lg shadow-sm p-6">
+              <div class="text-sm text-gray-600">마지막 갱신</div>
+              <div class="text-xl mt-2" id="rt-last">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 실시간 차트 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8" id="rt-charts">
+          <div class="bg-white rounded-lg shadow-sm p-6">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-base font-medium text-gray-800">온도 추이</h3>
+              <span class="text-xs text-gray-500">실시간</span>
+            </div>
+            <div id="rt-temp-chart" class="w-full h-64"></div>
+          </div>
+          <div class="bg-white rounded-lg shadow-sm p-6">
+            <div class="flex justify-between items-center mb-4">
+              <h3 class="text-base font-medium text-gray-800">배터리 전압 추이</h3>
+              <span class="text-xs text-gray-500">실시간</span>
+            </div>
+            <div id="rt-batt-chart" class="w-full h-64"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- (선택) 알람 캡처 로직 유지 -->
+  <script src="alarm-capture.js"></script>
+
+  <!-- ★ 공통 UI JS (autoInit로 사이드바/로테이터 자동 바인딩) -->
+  <script type="module" src="./ui-common.js"></script>
+
+  <!-- ★ 페이지 전용 스크립트 -->
+  <script>
+    // ===== 공통 사이드바 항목 구성 =====
+    window.__SJ_SIDEBAR__ = {
+      logo: { text: 'Tag Monitor', href: 'design.html', iconSrc: '', version: 'v0.1' },
+      search: false,
+      sections: [
+        { title: 'Main', items: [
+          { icon: 'ri-time-line',        label: '실시간 대시보드', href: 'design.html',  activeMatch: 'design.html' },
+          { icon: 'ri-device-line',      label: '디바이스 상세',   href: 'detail.html',  activeMatch: 'detail.html' },
+          { icon: 'ri-price-tag-3-line', label: '태그',            href: 'tag.html',     activeMatch: 'tag.html' },
+          { icon: 'ri-rfid-line',        label: '게이트웨이',      href: 'gateway.html', activeMatch: 'gateway.html' },
+          { icon: 'ri-alarm-warning-line',label:'알람',            href: 'alarm.html',   activeMatch: 'alarm.html' },
+          { icon: 'ri-settings-3-line',  label: '설정',            href: 'setting.html', activeMatch: 'setting.html' }
+        ] }
+      ],
+      initiallyOpen: false
+    };
+  </script>
+
+  <!-- ===== 실시간/REST/WS/차트/로테이터(공통화 버전) ===== -->
+  <script>
+    // ===== 설정 =====
+    const WS_URL = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const API_BASE = "https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const ALLOWED_API = "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed";
+    const COLLECTION_PATH = "calculated_locations";
+    const WINDOW_MS = 5 * 60 * 1000;
+    const ACTIVE_MS = 60 * 1000;
+    const BACKFILL_MIN = 5;
+    const SKY = '#87CEFA';
+    const SKY_AREA_TOP = 'rgba(135,206,250,0.35)';
+    const SKY_AREA_BOTTOM = 'rgba(135,206,250,0.06)';
+    const GAP_MS = 20 * 1000;
+    function macKey(s){ return String(s||'').toUpperCase().replace(/[^0-9A-F]/g,''); } 
+    function macDisplay(k){ const h = macKey(k); return h.length===12 ? h.match(/.{2}/g).join(':') : h; } 
+    const IS_ADMIN = (()=>{ try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; } })();
+    let __ALLOWED_TAG_IDS = [];
+    let __OWNER_OF = new Map();
+    let __ALLOWED_READY = false;
+
+    const normId = s => String(s || '').toUpperCase().trim();
+
+    function currentEmail(){ try { return sessionStorage.getItem('app_user_email') || ''; } catch { return ''; } }
+    async function getIdToken(){
+      return new Promise(resolve=>{
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          const u = pool.getCurrentUser();
+          if (!u) return resolve('');
+          u.getSession((err,s)=>{ if(err||!s||!s.isValid()) return resolve(''); resolve(s.getIdToken().getJwtToken());});
+        }catch{ resolve(''); }
+      });
+    }
+
+    async function fetchAllowedTagIdsFromServer(scope = (IS_ADMIN ? 'all' : 'descendants'), includeOwner = true){
+      const me = currentEmail();
+      if (!me) return [];
+      const token = await getIdToken();
+
+      const url = new URL(ALLOWED_API);
+      url.searchParams.set('user_id', me);
+      url.searchParams.set('scope', scope);
+      if (includeOwner) url.searchParams.set('include_owner', '1');
+
+      try{
+        const res = await fetch(url.toString(), {
+          method:'GET',
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+          mode:'cors'
+        });
+        const data = await res.json().catch(()=> ({}));
+        if (!res.ok || !data || !Array.isArray(data.tags)) return [];
+
+        __OWNER_OF = new Map();
+        const ids = [];
+        for (const t of data.tags){
+          if (typeof t === 'string'){
+            const id = macKey(t);
+            if (id.length === 12) ids.push(id);
+          } else if (t && (t.tag_mac || t.id)){
+            const id = macKey(t.tag_mac || t.id);
+            if (id.length === 12) {
+              ids.push(id);
+              if (t.ownerId) __OWNER_OF.set(id, String(t.ownerId));
+            }
+          }
+        }
+        return [...new Set(ids)];
+      }catch(e){
+        console.error('[allowed] fetch error:', e);
+        return [];
+      }
+    }
+
+    async function refreshAllowedIds(){
+      __ALLOWED_TAG_IDS = await fetchAllowedTagIdsFromServer(IS_ADMIN ? 'all' : 'descendants', true);
+      __ALLOWED_READY = true;
+    }
+
+    async function waitAuthReady(timeoutMs=8000){
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs){
+        const email = currentEmail();
+        if (email){
+          const t = await getIdToken();
+          if (t) return true;
+        }
+        await new Promise(r=>setTimeout(r,150));
+      }
+      console.warn('[auth] waitAuthReady timeout; continue without token');
+      return false;
+    }
+
+    // ===== DOM =====
+    const $list = document.getElementById('rt-device-list');
+    const $count = document.getElementById('rt-count');
+    const $tempLabel = document.getElementById('rt-tempLabel');
+    const $tempState = document.getElementById('rt-tempState');
+    const $battLabel = document.getElementById('rt-battLabel');
+    const $battState = document.getElementById('rt-battState');
+    const $location  = document.getElementById('rt-location');
+    const $lastSeen  = document.getElementById('rt-last');
+    const $openMap   = document.getElementById('open-map');
+    const $errorCode = document.getElementById('rt-errorCode');
+    const $sendType  = document.getElementById('rt-sendType');
+    const $errorState = document.getElementById('rt-errorState');
+
+    // ===== 상태 =====
+    const devices = new Map();
+    const series  = new Map();
+    let knownIds = [];
+    let selected  = null;
+
+    // ===== 로컬스토리지(선택) =====
+    const PREF_KEY = 'ble_rt_pref_v1';
+    const saveSelected = ()=> { try{ localStorage.setItem(PREF_KEY, JSON.stringify({selected})); }catch{} };
+    const restoreSelected = ()=> {
+      try{
+        const raw = localStorage.getItem(PREF_KEY);
+        if(!raw) return;
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj.selected==='string') selected = obj.selected;
+      }catch{}
+    };
+
+    // ===== 차트 =====
+    let rtTempChart=null, rtBattChart=null;
+    const makeLineOpts = (name, yFmt) => ({
+      animation:false,
+      color:[SKY],
+      tooltip:{ trigger:'axis', backgroundColor:'rgba(255,255,255,.9)', borderColor:'#e2e8f0',
+        textStyle:{color:'#1f2937'}, axisPointer:{type:'line', lineStyle:{color:SKY}} },
+      grid:{top:10,right:10,bottom:30,left:50},
+      xAxis:{ type:'time', axisLine:{lineStyle:{color:'#e2e8f0'}}, axisLabel:{color:'#64748b',fontSize:10} },
+      yAxis:{ type:'value', axisLine:{show:false}, axisLabel:{color:'#64748b',fontSize:10,formatter:yFmt},
+              splitLine:{lineStyle:{color:'#f1f5f9'}} },
+      series:[{ name, type:'line', smooth:true, symbol:'none', lineStyle:{width:3,color:SKY},
+        areaStyle:{ color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:SKY_AREA_TOP},{offset:1,color:SKY_AREA_BOTTOM}]) },
+        data:[] }]
+    });
+    function initCharts(){
+      rtTempChart=echarts.init(document.getElementById('rt-temp-chart'));
+      rtBattChart=echarts.init(document.getElementById('rt-batt-chart'));
+      rtTempChart.setOption(makeLineOpts('온도(℃)', v=>`${v}`));
+      rtBattChart.setOption(makeLineOpts('배터리(V)', v=>`${v}`));
+      addEventListener('resize', ()=>{ rtTempChart.resize(); rtBattChart.resize(); });
+    }
+    function pruneSeriesInPlace(obj, now=Date.now()){
+      const cutoff = now - WINDOW_MS;
+      while (obj.temp.length && obj.temp[0][0] < cutoff) obj.temp.shift();
+      while (obj.batt.length && obj.batt[0][0] < cutoff) obj.batt.shift();
+    }
+    function updateChartsFor(id){
+      if (!rtTempChart || !rtBattChart) return;
+      const now = Date.now();
+      const s = series.get(id) || { temp:[], batt:[], seenTs:new Set() };
+      pruneSeriesInPlace(s, now);
+      const xwin = { min: now - WINDOW_MS, max: now };
+      rtTempChart.setOption({ xAxis:xwin, series:[{data:s.temp}] });
+      rtBattChart.setOption({ xAxis:xwin, series:[{data:s.batt}] });
+    }
+
+    // ===== 렌더링 =====
+    function stateOfTemp(t){ if(t==null) return '—'; if(t>70||t<0) return '이상'; if(t>=35) return '높음'; if(t<=5) return '낮음'; return '정상'; }
+    function stateOfBatt(v){ if(v==null) return '—'; if(v<2600) return '낮음'; if(v>3300) return '높음'; return '정상'; }
+
+    function setErrorBadge(code){
+      if (!$errorState) return;
+      const n = Number(code);
+      let label = '—';
+      let cls = 'bg-gray-100 text-gray-700';
+      if (Number.isFinite(n)) {
+        if (n === 0) { label = '정상'; cls = 'bg-green-100 text-green-700'; }
+        else if (n === 1) { label = '경고'; cls = 'bg-amber-100 text-amber-700'; }
+        else if (n === 2) { label = '에러'; cls = 'bg-red-100 text-red-700'; }
+        else { label = String(n); cls = 'bg-gray-100 text-gray-700'; }
+      }
+      $errorState.className = 'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ' + cls;
+      $errorState.textContent = label;
+    }
+
+    function renderList(){
+      $list.innerHTML = '';
+      const ids = (__ALLOWED_TAG_IDS.length ? __ALLOWED_TAG_IDS : knownIds).slice();
+      $count.textContent = ids.length ? `${ids.length}대` : '';
+
+      ids.forEach(idRaw=>{
+        const id = (idRaw == null ? '' : String(idRaw)).trim().toUpperCase();
+        const d = devices.get(id) || {};
+
+        const btn = document.createElement('button');
+        btn.className =
+          'w-full text-left px-3 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 ' +
+          (selected===id ? 'bg-blue-50 border-blue-200' : '');
+
+        const idLabel = macDisplay(id) || '(ID 없음)';
+        btn.innerHTML = `
+          <div class="flex items-center justify-between">
+            <span class="font-medium mono text-gray-800">${idLabel}</span>
+            <span class="text-xs text-gray-500">${d.ts? new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',hour12:false,year:'2-digit',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(d.ts) : ''}</span>
+          </div>
+          <div class="text-xs text-gray-600 mt-0.5">
+            ${Number.isFinite(d.lat)&&Number.isFinite(d.lng)? `${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}` : '위치 —'}
+          </div>`;
+        btn.onclick = ()=> select(id);
+        $list.appendChild(btn);
+      });
+
+      updateTicker();
+    }
+
+    function renderDetail(id){
+      const d = devices.get(id);
+      if(!d){
+        $tempLabel.textContent='온도 데이터 : —'; $tempState.textContent='—';
+        $battLabel.textContent='배터리 : —'; $battState.textContent='—';
+        $location.textContent='—'; $lastSeen.textContent='—';
+        $errorCode.textContent='—'; $sendType.textContent='—';
+        setErrorBadge(null);
+        $openMap.disabled=true; return;
+      }
+      $tempLabel.textContent = `온도 데이터 : ${d.temperature ?? '—'}°C`;
+      $tempState.textContent = stateOfTemp(d.temperature);
+
+      const battV = (d.battery_voltage!=null) ? (d.battery_voltage>20 ? d.battery_voltage/1000 : d.battery_voltage) : null;
+      $battLabel.textContent = `배터리 : ${battV!=null ? battV.toFixed(2)+' V' : '—'}`;
+      $battState.textContent  = stateOfBatt(d.battery_voltage);
+
+      if (Number.isFinite(d.lat) && Number.isFinite(d.lng)) { $location.textContent=`${d.lat.toFixed(6)}, ${d.lng.toFixed(6)}`; $openMap.disabled=false; }
+      else { $location.textContent='—'; $openMap.disabled=true; }
+      $lastSeen.textContent = d.ts ? new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(d.ts) : '—';
+
+      $errorCode.textContent = (d.error_code ?? '—');
+      $sendType.textContent  = (d.send_type  ?? '—');
+      setErrorBadge(d.error_code);
+
+      updateChartsFor(id);
+    }
+
+    // ===== 선 끊기 보정 =====
+    function binInsertIndex(arr, ts){
+      let lo = 0, hi = arr.length;
+      while (lo < hi){
+        const mid = (lo + hi) >> 1;
+        if (arr[mid][0] <= ts) lo = mid + 1; else hi = mid;
+      }
+      return lo;
+    }
+    function appendSortedWithGap(arr, ts, val){
+      if (arr.length){
+        const lastTs = arr[arr.length-1][0];
+        if (ts - lastTs > GAP_MS){
+          arr.push([lastTs + 1, null]);
+        }
+      }
+      const i = binInsertIndex(arr, ts);
+      if (i > 0 && arr[i-1][0] === ts){ arr[i-1][1] = val; return; }
+      if (i < arr.length && arr[i][0] === ts){ arr[i][1] = val; return; }
+      arr.splice(i, 0, [ts, val]);
+    }
+
+    // ===== 시계열 추가 =====
+    function pushSample(id, ts, temp, battRaw){
+      let obj = series.get(id);
+      if (!obj){
+        obj = { temp: [], batt: [], seenTs: new Set() };
+        series.set(id, obj);
+      }
+      if (obj.seenTs.has(ts)) return;
+      obj.seenTs.add(ts);
+
+      if (temp != null && Number.isFinite(Number(temp))){
+        appendSortedWithGap(obj.temp, ts, Number(temp));
+      }
+      if (battRaw != null && Number.isFinite(Number(battRaw))){
+        let v = Number(battRaw);
+        if (v > 20) v = v / 1000;
+        appendSortedWithGap(obj.batt, ts, v);
+      }
+
+      pruneSeriesInPlace(obj, Date.now());
+      const MAX_POINTS = 300;
+      if (obj.temp.length > MAX_POINTS) obj.temp.splice(0, obj.temp.length - MAX_POINTS);
+      if (obj.batt.length > MAX_POINTS) obj.batt.splice(0, obj.batt.length - MAX_POINTS);
+    }
+
+    // ===== REST: 디바이스 목록 =====
+    async function loadDeviceList(){
+      if (!__ALLOWED_READY) await refreshAllowedIds();
+
+      knownIds = __ALLOWED_TAG_IDS.slice();
+      for (const id of knownIds){ if (!devices.has(id)) devices.set(id, {}); }
+      renderList();
+
+      // (옵션) REST 목록을 허용 리스트와 교집합으로 합치기
+      try{
+        const res = await fetch(`${API_BASE}/${COLLECTION_PATH}`, {mode:'cors'});
+        const txt = await res.text();
+        if (!res.ok) return;
+        const data = JSON.parse(txt);
+        const list = Array.isArray(data?.devices)
+          ? data.devices
+          : (Array.isArray(data) ? data : []);
+        const extra = list.map(x => {
+          if (typeof x === 'string') return macKey(x);
+          if (x && typeof x === 'object') {
+            const v = x.tag_address || x.id || x.mac || x.device_id || x.tagMac;
+            return macKey(v || '');
+          }
+          return '';
+        }).filter(id => id.length === 12 && __ALLOWED_TAG_IDS.includes(id));
+        const union = [...new Set([...knownIds, ...extra])].sort();
+        const changed = union.length !== knownIds.length || union.some((v,i)=>v!==knownIds[i]);
+        if (changed){
+          knownIds = union;
+          for (const id of extra){ if (!devices.has(id)) devices.set(id, {}); }
+          renderList();
+        }
+      }catch(e){
+        console.error('[devices] failed:', e);
+      }
+    }
+
+    // ===== 선택 & 백필 =====
+    async function select(id){
+      id = macKey(id);
+      if (__ALLOWED_TAG_IDS.length && !__ALLOWED_TAG_IDS.includes(id)) return;
+      selected = id; saveSelected();
+      series.set(id, { temp:[], batt:[], seenTs:new Set() });
+      if (!devices.has(id)) devices.set(id, {});
+      renderList();
+      renderDetail(id);
+      await backfillSelected();
+      renderDetail(id);
+      updateTicker();
+    }
+
+    async function backfillSelected(){
+      if (!selected) return;
+      const id = macKey(selected);
+      if (__ALLOWED_TAG_IDS.length && !__ALLOWED_TAG_IDS.includes(id)) return;
+      const now = Date.now();
+      const since = now - BACKFILL_MIN*60*1000;
+      const url = `${API_BASE}/${COLLECTION_PATH}?tag_address=${encodeURIComponent(macDisplay(id))}&days=1&order=asc&limit=10000`;
+      try{
+        const res = await fetch(url, {mode:'cors'});
+        const txt = await res.text();
+        if (!res.ok) { console.error('[backfill] HTTP', res.status, txt); return; }
+        let data; try{ data = JSON.parse(txt); }catch{ console.error('[backfill] invalid json'); return; }
+        const rows = Array.isArray(data) ? data : (data.items || []);
+        const items = rows.map(r=>{
+          const toNum = v => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+          const pickTs = (x) => {
+            let t = toNum(x.timestamp ?? x.ts ?? x.timestamp_epoch ?? x.raw_time ?? x.time);
+            if (t==null) return null; return (t < 1e12) ? t*1000 : t;
+          };
+          const ts = pickTs(r);
+          return {
+            ts,
+            temp: toNum(r.temperature ?? r.temp),
+            batt: toNum(r.battery_voltage ?? r.battery),
+            lat:  toNum(r.latitude),
+            lng:  toNum(r.longitude ?? r.longtitude),
+            error_code: r.error_code ?? null,
+            send_type:  r.send_type  ?? null
+          };
+        }).filter(x=> Number.isFinite(x.ts) && x.ts>=since && x.ts<=now)
+          .sort((a,b)=>a.ts-b.ts);
+
+        for (const it of items) pushSample(selected, it.ts, it.temp, it.batt);
+
+        if (items.length){
+          const last = items[items.length-1];
+          const prev = devices.get(selected) || {};
+          devices.set(selected, {
+            ...prev,
+            temperature: last.temp ?? prev.temperature,
+            battery_voltage: last.batt ?? prev.battery_voltage,
+            lat: last.lat ?? prev.lat,
+            lng: last.lng ?? prev.lng,
+            error_code: last.error_code ?? prev.error_code,
+            send_type: last.send_type ?? prev.send_type,
+            ts: last.ts
+          });
+        }
+        renderList();
+        updateChartsFor(selected);
+        updateTicker();
+      }catch(e){
+        console.error('[backfill] failed:', e);
+      }
+    }
+
+    // ===== WebSocket =====
+    function handleMessage(raw){
+      try{
+        const toNum = v => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+        const msg = JSON.parse(raw);
+        const raw = msg.tag_address || msg.device_id || msg.id;
+        if (!raw) return;
+        // 쉼표/공백 구분자로 다건 처리
+        const ids = String(raw).split(/[,\s]+/).map(macKey).filter(h => h.length === 12);
+        for (const id of ids) {
+          if (__ALLOWED_TAG_IDS.length && !__ALLOWED_TAG_IDS.includes(id)) continue;
+          if (!knownIds.includes(id)) { knownIds.push(id); knownIds.sort(); }
+
+          const temp = toNum(msg.temperature);
+          const batt = (msg.battery_voltage!=null) ? toNum(msg.battery_voltage)
+                      : (msg.battery!=null ? toNum(msg.battery) : null);
+          const lat  = toNum(msg.latitude);
+          const lng  = toNum(msg.longitude);
+          const tsRaw = toNum(msg.timestamp ?? msg.time ?? msg.ts ?? msg.timestamp_epoch) ?? Date.now();
+          const ts = tsRaw < 1e12 ? tsRaw*1000 : tsRaw;
+
+          const next = devices.get(id) || {};
+          devices.set(id, {
+            ...next,
+            temperature: temp ?? next.temperature,
+            battery_voltage: batt ?? next.battery_voltage,
+            lat: lat ?? next.lat,
+            lng: lng ?? next.lng,
+            error_code: (msg.error_code ?? next.error_code),
+            send_type:  (msg.send_type  ?? next.send_type),
+            ts,
+            lastWsTs: Date.now(),
+          });
+          pushSample(id, ts, temp, batt);
+          if (selected===id){ renderDetail(id); }
+        }
+        renderList();
+        updateTicker();
+      }catch(e){
+        console.error('WS parse error:', e, raw);
+      }
+    }
+
+    let ws, retry=0;
+    function connectWS(){
+      ws = new WebSocket(WS_URL);
+      ws.onopen = ()=>{ retry=0; };
+      ws.onmessage = (ev)=> handleMessage(ev.data);
+      ws.onclose = ()=> setTimeout(connectWS, Math.min(1000*(++retry), 10000));
+      ws.onerror = ()=> ws.close();
+    }
+
+    // ===== GPS 페이지 열기 =====
+    function openGpsPage(){
+      if(!selected || !devices.has(selected)) return;
+      const d = devices.get(selected);
+      if(!Number.isFinite(d.lat)||!Number.isFinite(d.lng)){ alert('선택된 디바이스의 위치 데이터가 없습니다.'); return; }
+      const p = new URLSearchParams();
+      p.set('devices', selected);
+      p.set('center', `${d.lat},${d.lng}`);
+      p.set('lat', d.lat); p.set('lng', d.lng); p.set('zoom', 16);
+      if (Number.isFinite(d.ts)) p.set('ts', d.ts);
+      if (d.temperature!=null) p.set('temp', d.temperature);
+      if (d.battery_voltage!=null) p.set('battery', d.battery_voltage);
+      window.open(`gps.html?${p.toString()}`, '_blank');
+    }
+
+    // ===== 전광판(공통 Rotator 사용) =====
+    let rotator = null;
+
+    function updateTicker(){
+      const now = Date.now();
+      const alerts = [];
+
+      for (const id of knownIds){
+        const d = devices.get(id) || {};
+        const age = Number.isFinite(d.ts) ? (now - d.ts) : Infinity;
+        if (age > ACTIVE_MS) continue;
+
+        const code = Number(d.error_code);
+        const label = macDisplay(id); // 보기용 MAC (AA:BB:..)
+
+        if (code === 2){
+          alerts.push({ id: label, kind:'device', level:'error', ts: d.ts });
+        } else if (code === 1){
+          alerts.push({ id: label, kind:'device', level:'warn',  ts: d.ts });
+        }
+      }
+
+      // 공통 허브로 전달(있으면 direct, 없으면 이벤트로)
+      if (window.SJUI?.TickerHub) {
+        window.SJUI.TickerHub.setAlerts(alerts);
+      } else {
+        window.dispatchEvent(new CustomEvent('sjui:alert-set', { detail: { alerts } }));
+      }
+    }
+
+
+    window.__tickerTimer = window.__tickerTimer || setInterval(() => { updateTicker(); }, 5000);
+
+    // ===== 시작 =====
+    (async function(){
+      await waitAuthReady();
+
+      document.getElementById('open-map')?.addEventListener('click', openGpsPage);
+      (function waitSJUI(){
+        if (!window.SJUI) return setTimeout(waitSJUI, 40);
+        updateTicker(); // ✅ 로테이터 준비 직후 현재 상태 반영
+      })();
+
+      initCharts();
+
+      restoreSelected();
+      await refreshAllowedIds();
+      if (!selected || !__ALLOWED_TAG_IDS.includes(selected)) {
+        selected = __ALLOWED_TAG_IDS[0] || null;
+        saveSelected();
+      }
+
+      await loadDeviceList();
+
+      if (selected && knownIds.includes(selected)){
+        if (!devices.has(selected)) devices.set(selected, { ts: null });
+        renderList();
+        await backfillSelected();
+        renderDetail(selected);
+      } else {
+        if (selected && !knownIds.includes(selected)) { selected = null; saveSelected(); renderList(); }
+      }
+
+      updateTicker();
+      connectWS();
+    })();
+  </script>
+</body>
+</html>

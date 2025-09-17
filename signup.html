@@ -1,0 +1,39 @@
+<!--signup.html-->
+
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Sign Up</title>
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+  <script src="main.js"></script>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="main.css">
+</head>
+
+<body>
+  <div class="container">
+    <p class="fsize">Sign Up</p>  
+    <input type="text" id="email" placeholder="email">
+    <input type="password" id="password" placeholder="password">
+    <input class="fsize_Sign_button" type="button" value="Sign Up" onclick="SignUp();">
+    <input type="button" value="Back" onclick="window.location.href='login.html';">
+  </div>
+  <script>
+  async function doSignUp(){
+    const username = document.getElementById('email').value.trim(); // 아이디=이메일
+    const password = document.getElementById('password').value;
+    const email = username;
+
+    try{
+      await Auth.signUp({ username, password, email });
+      alert('가입 완료! 이메일 인증 후 로그인 해주세요.');
+      location.replace('login.html');
+    }catch(e){
+      alert(e?.message || '회원가입 실패');
+    }
+  }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <!-- ▼▼▼ 보호 페이지 공통: <head> 맨 위에 넣기 ▼▼▼ -->
+  <meta charset="UTF-8" />
+  <style> html.auth-check { visibility: hidden } </style>
+  <style>
+  /* 전광판 페이드인 */
+
+  /* 온도 bar */
+  /* 1) 래퍼 높이 확보 */
+  #temp-threshold-card .flex-1.relative{
+    position: relative;
+    height: 16px; /* 엄지 12px 기준 여유 */
+  }
+
+  /* 2) 막대(bar) 세로 중앙 고정 */
+  #tempRangeBar{
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 2px;
+    border-radius: 6px;
+  }
+
+  /* 3) range 입력을 중앙에 올리고 기본 트랙/하이라이트 제거 */
+  .temp-range-input{
+    position: absolute;
+    left: 0; right: 0;
+    top: 50% !important;              /* 기존 top:-6px 덮어쓰기 */
+    transform: translateY(-50%);
+    height: 16px;
+    background: transparent;
+    outline: none;
+    pointer-events: none;             /* 트랙 클릭 방지, 엄지만 드래그 */
+    -webkit-appearance: none;
+    appearance: none;
+    accent-color: transparent;        /* 크롬 파란 진행선 제거 */
+  }
+
+  /* WebKit (Chrome/Safari) */
+  .temp-range-input::-webkit-slider-runnable-track{
+    height: 2px;
+    background: transparent;
+    border: none;
+  }
+  .temp-range-input::-webkit-slider-thumb{
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #1E88E5;
+    cursor: grab;
+    margin-top: -5px;                 /* (엄지12 - 트랙2)/2 = 5 → 중앙 보정 */
+    pointer-events: auto;
+  }
+
+  /* Firefox */
+  .temp-range-input::-moz-range-track{ height: 2px; background: transparent; border: none; }
+  .temp-range-input::-moz-range-progress{ height: 2px; background: transparent; }
+  .temp-range-input::-moz-range-thumb{
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #1E88E5;
+    cursor: grab;
+    pointer-events: auto;
+}
+
+  </style>
+
+  <style>
+  /* ── 공통: 배터리 바도 온도 바와 동일한 수직 중앙 정렬 ── */
+  #batt-threshold-card .flex-1.relative{
+    position: relative;
+    height: 16px;
+  }
+  #battRangeBar{
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 2px;
+    border-radius: 6px;
+  }
+  .batt-range-input{
+    position: absolute;
+    left: 0; right: 0;
+    top: 50% !important;
+    transform: translateY(-50%);
+    height: 16px;
+    background: transparent;
+    outline: none;
+    pointer-events: none;
+    -webkit-appearance: none;
+    appearance: none;
+    accent-color: transparent;
+  }
+  .batt-range-input::-webkit-slider-runnable-track{ height:2px; background:transparent; border:none; }
+  .batt-range-input::-webkit-slider-thumb{
+    -webkit-appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #1E88E5; cursor: grab; margin-top:-5px; pointer-events:auto;
+  }
+  .batt-range-input::-moz-range-track{ height:2px; background:transparent; border:none; }
+  .batt-range-input::-moz-range-progress{ height:2px; background:transparent; }
+  .batt-range-input::-moz-range-thumb{
+    width:12px; height:12px; border-radius:50%;
+    background:#1E88E5; cursor:grab; pointer-events:auto;
+  }
+</style>
+
+
+  <script>
+    // UI 깜빡임 방지: 인증 끝날 때까지 숨김
+    document.documentElement.classList.add('auth-check');
+
+    // 로그인 페이지 경로 (필요시 상대경로 조정)
+    window.__LOGIN_PAGE__ = 'login.html';
+
+    // Cognito User Pool 설정
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft',
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota',
+    };
+  </script>
+
+  <!-- Cognito SDK들 (순서 중요) -->
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <!-- 인증 가드 -->
+  <script>
+    (function authGuard() {
+      function goLogin() {
+        const u = new URL(window.__LOGIN_PAGE__, location.href);
+        u.searchParams.set('redirect', location.href);
+        location.replace(u.toString());
+      }
+
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity){ return setTimeout(waitLib, 20); }
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+
+          if (!sessionStorage.getItem('app_session')) {
+            const u = pool.getCurrentUser();
+            if (u) { try { u.signOut(); } catch(e){} }
+            return goLogin();
+          }
+
+          const user = pool.getCurrentUser();
+          if (!user) return goLogin();
+
+          user.getSession(function(err, session){
+            if (err || !session || !session.isValid()) return goLogin();
+
+            try {
+              const groups = (session.getIdToken().payload || {})['cognito:groups'] || [];
+              sessionStorage.setItem('app_is_admin', groups.includes('admin') ? '1' : '0');
+            } catch {}
+
+            document.documentElement.classList.remove('auth-check');
+
+            user.getUserAttributes(function(e, attrs){
+              let email = (typeof user.getUsername === 'function') ? user.getUsername() : '';
+              if (!e && Array.isArray(attrs)) {
+                const em = attrs.find(a => (a.getName && a.getName() === 'email') || a?.Name === 'email');
+                if (em) email = (em.getValue ? em.getValue() : em.Value);
+              }
+              try { sessionStorage.setItem('app_user_email', email); } catch {}
+              const box  = document.getElementById('sidebar-greet');
+              const name = document.getElementById('sidebar-greet-name');
+              if (box && name) { name.textContent = email || ''; box.classList.remove('hidden'); }
+            });
+          });
+        }catch(e){ goLogin(); }
+      })();
+    })();
+  </script>
+  <!-- ▲▲▲ 여기까지가 '무조건 로그인 먼저' 가드 ▲▲▲ -->
+
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Tag Monitor</title>
+
+  <!-- 아이콘/폰트/유틸 -->
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { primary:'#1E88E5', secondary:'#F5F6FA' },
+          borderRadius: {
+            'none':'0px','sm':'4px', DEFAULT:'8px','md':'12px','lg':'16px',
+            'xl':'20px','2xl':'24px','3xl':'32px','full':'9999px','button':'8px'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- ECharts -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
+
+  <!-- Leaflet (지도) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- ★ 공통 UI CSS -->
+  <link rel="stylesheet" href="./ui-common.css" />
+
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc}
+    .mono{font-family:'Roboto Mono',monospace}
+  </style>
+</head>
+
+<body>
+  <!-- ★ 공통 레이아웃(sj-shell) + 사이드바/메인 -->
+  <div class="sj-shell">
+    <!-- 공통 사이드바: 자동 렌더 -->
+    <aside class="sj-sidebar" data-sj-sidebar></aside>
+
+    <!-- 메인 -->
+    <main class="sj-main">
+      <!-- 공통형 헤더 -->
+      <header class="sj-header">
+        <div class="sj-title text-sm"></div>
+
+        <!-- ★ 전광판(공통 로테이터) -->
+        <div data-sj-rotator id="hdr-rotator" class="w-[240px] sm:w-[320px] md:w-[480px]"></div>
+      </header>
+
+      <!-- 페이지 콘텐츠 -->
+      <section class="p-6">
+        <!-- 상단 컨트롤 -->
+        <header class="mb-6 flex items-center justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-bold text-gray-800">디바이스 상세</h1>
+            <div class="text-sm text-gray-500" id="subTitle">—</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-sm text-gray-600">디바이스</label>
+            <select id="deviceSelect" class="border rounded px-2 py-1 text-sm min-w-[200px]">
+              <option value="" selected disabled>선택하세요</option>
+            </select>
+
+            <label class="text-sm text-gray-600 ml-2">기간</label>
+            <select id="days" class="border rounded px-2 py-1 text-sm">
+              <option value="" selected disabled>선택하세요</option>
+              <option value="1">최근 1일</option>
+              <option value="3">최근 3일</option>
+              <option value="7">최근 7일</option>
+            </select>
+
+            <button id="btnConfirm" class="px-3 py-1.5 bg-blue-600 text-white rounded text-sm disabled:opacity-50" disabled>
+              확인
+            </button>
+          </div>
+        </header>
+
+          <!-- 요약 카드 -->
+         <!-- [A 섹션] 지표/차트/지도 -->
+        <section class="mb-8" id="section-a">
+          <section class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="text-xs text-gray-500">배터리 평균 (V)</div>
+              <div class="text-2xl font-bold" id="avgBatt">—</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="text-xs text-gray-500">온도 평균 (°C)</div>
+              <div class="text-2xl font-bold" id="avgTemp">—</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="text-xs text-gray-500">데이터 건수</div>
+              <div class="text-2xl font-bold" id="statCount">—</div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="text-xs text-gray-500">시간 범위</div>
+              <div class="text-sm" id="statRange">—</div>
+            </div>
+          </section>
+
+          <!-- 차트 -->
+          <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="mb-2 text-sm text-gray-600">배터리 전압 추이 (V)</div>
+              <div id="battChart" class="w-full h-72"></div>
+            </div>
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="mb-2 text-sm text-gray-600">온도 추이 (°C)</div>
+              <div id="tempChart" class="w-full h-72"></div>
+            </div>
+          </section>
+
+          <!-- 이동 경로 (지도) -->
+          <section class="bg-white rounded-lg shadow p-4 mb-8">
+            <div class="mb-2 flex items-center justify-between">
+              <div class="text-sm text-gray-600">이동 경로</div>
+              <div class="text-xs text-gray-500" id="routeStats">—</div>
+            </div>
+            <div id="routeMap" class="w-full h-96 rounded-md overflow-hidden"></div>
+          </section>
+        </section>
+
+        <section class="mb-10 hidden" id="section-b">
+          <h2 class="text-lg font-bold text-gray-800 mb-3">임계값 설정</h2>
+            
+            <!-- ▼ 온도 임계범위 설정 (bar 슬라이더) -->
+            <section class="bg-white rounded-lg shadow p-4 mb-6" id="temp-threshold-card">
+              <div class="flex items-center justify-between">
+                <div class="text-sm font-semibold text-gray-700">온도 임계범위</div>
+                <div class="text-xs text-gray-500">
+                  정상: <span id="thLowLabel" class="font-medium">0</span>°C ~
+                  <span id="thHighLabel" class="font-medium">35</span>°C
+                  <span class="ml-2 text-gray-400">(슬라이더 범위: −40 ~ 85)</span>
+                </div>
+              </div>
+
+              <div class="mt-3 flex items-center gap-3">
+                <div class="flex-1 relative">
+                  <!-- 배경 바(그라데이션; JS로 칠함) -->
+                  <div id="tempRangeBar" class="temp-range"></div>
+                  <!-- 듀얼 슬라이더(트랙 투명, 엄지(thumb)만 보이게) -->
+                  <input id="thLow"  type="range" min="-40" max="85" step="1" class="temp-range-input" aria-label="정상 최저온도">
+                  <input id="thHigh" type="range" min="-40" max="85" step="1" class="temp-range-input" aria-label="정상 최고온도">
+                </div>
+
+                <!-- 숫자 직접 입력(선택) -->
+                <div class="flex items-center gap-2 text-xs text-gray-600">
+                  <label>최저</label>
+                  <input id="thLowNum" type="number" class="w-16 border rounded px-2 py-1 text-xs" step="1" min="-40" max="85">
+                  <label class="ml-2">최고</label>
+                  <input id="thHighNum" type="number" class="w-16 border rounded px-2 py-1 text-xs" step="1" min="-40" max="85">
+                </div>
+              </div>
+              <div class="mt-2 text-xs text-gray-600">
+                마지막 측정 온도: <span id="tempNow" class="mono">—</span> °C
+                → 상태: <span id="tempNowState" class="font-medium">—</span>
+              </div>
+
+            </section>
+            <!-- ▣ 배터리 임계범위 (신규) -->
+            <section class="bg-white rounded-lg shadow p-4 mb-2" id="batt-threshold-card">
+              <div class="flex items-center justify-between">
+                <div class="text-sm font-semibold text-gray-700">배터리 임계범위(%)</div>
+                <div class="text-xs text-gray-500">
+                  충전 필요 기준: <span id="battThLabel" class="font-medium">20</span>%
+                  <span class="ml-2 text-gray-400">(0~100%, 3.3V = 100%)</span>
+                </div>
+              </div>
+
+              <div class="mt-3 flex items-center gap-3">
+                <div class="flex-1 relative">
+                  <!-- 배경 바 -->
+                  <div id="battRangeBar"></div>
+                  <!-- 단일 슬라이더(임계 % 한계) -->
+                  <input id="battTh" type="range" min="0" max="100" step="1" class="batt-range-input" aria-label="배터리 최소 정상 %">
+                </div>
+
+                <!-- 숫자 입력 -->
+                <div class="flex items-center gap-2 text-xs text-gray-600">
+                  <label>최소 정상%</label>
+                  <input id="battThNum" type="number" class="w-16 border rounded px-2 py-1 text-xs" step="1" min="0" max="100">
+                </div>
+              </div>
+
+              <!-- 현재 상태 표시(가장 최근 샘플 기준) -->
+              <div class="mt-3 text-xs text-gray-600">
+                마지막 측정 배터리: <span id="battNowV" class="mono">—</span> V
+                (<span id="battNowPct" class="mono">—</span>%)
+                → 상태: <span id="battNowState" class="font-medium">—</span>
+              </div>
+            </section>
+        </section>
+            
+      </section>
+    </main>
+  </div>
+
+  <!-- (선택) 알람 캡처 로직 유지 -->
+  <script src="alarm-capture.js"></script>
+
+  <!-- ★ 공통 UI JS (autoInit로 사이드바/로테이터 자동 바인딩) -->
+  <script type="module" src="./ui-common.js"></script>
+
+  <!-- ✅ 공통 전광판 모듈: 모든 페이지 공통으로 사용 -->
+  <script type="module">
+    import {
+      buildTickerTextsFromDevices,
+      publishAlerts,
+      subscribeTickerFromOthers,
+      macPretty
+    } from './ticker-common.js';
+
+    // 모든 페이지에서 1회
+    subscribeTickerFromOthers();
+
+    function updateTicker() {
+      const texts = buildTickerTextsFromDevices({
+        devicesMap: window.devices ?? new Map(),
+        ids:        window.knownIds ?? [],
+        activeMs:   60_000,
+        // labeler: (id) => macPretty(id),
+      });
+
+      publishAlerts(
+        texts.map(t => ({ text: t, level: 'info' })),
+        { mode:'replace', staggerMs:1200, broadcast:true }
+      );
+    }
+
+    // 전역 노출(다른 코드가 호출)
+    window.updateTicker = updateTicker;
+
+    // 초기/주기 호출
+    updateTicker();
+    window.__tickerTimer ||= setInterval(updateTicker, 5000);
+  </script>
+
+  <!-- ★ 사이드바 항목 구성 -->
+  <script>
+    window.__SJ_SIDEBAR__ = {
+      logo: { text: 'Tag Monitor', href: 'design.html', iconSrc: '', version: 'v0.1' },
+      search: false,
+      sections: [
+        { title: 'Main', items: [
+          { icon: 'ri-time-line',         label: '실시간 대시보드', href: 'design.html',  activeMatch: 'design.html' },
+          { icon: 'ri-device-line',       label: '디바이스 상세',   href: 'detail.html',  activeMatch: 'detail.html' },
+          { icon: 'ri-price-tag-3-line',  label: '태그',            href: 'tag.html',     activeMatch: 'tag.html' },
+          { icon: 'ri-rfid-line',         label: '게이트웨이',      href: 'gateway.html', activeMatch: 'gateway.html' },
+          { icon: 'ri-alarm-warning-line',label: '알람',            href: 'alarm.html',   activeMatch: 'alarm.html' },
+          { icon: 'ri-settings-3-line',   label: '설정',            href: 'setting.html', activeMatch: 'setting.html' }
+        ] }
+      ],
+      initiallyOpen: false
+    };
+  </script>
+
+  <!-- ▼ 온도 임계값 로직 (태그별 저장/슬라이더/판정) -->
+  <script>
+  // ===== 태그별 온도 임계값 (공통) =====
+  const TH_NS   = 'temp_th_by_tag_v1'; // localStorage 네임스페이스
+  const ABS_MIN = -40, ABS_MAX = 85;   // 센서 허용범위
+  const DEF_LOW = 0,   DEF_HIGH = 35;  // 기본 정상구간(요청값)
+
+  // macHex12가 아래쪽에 있더라도 안전하게: 폴백 정의
+  if (typeof window.macHex12 !== 'function') {
+    window.macHex12 = function(raw){
+      const s = String(raw||'').trim();
+      const noSep = s.replace(/[:\-\.]/g, '');
+      return /^[0-9A-Fa-f]{12}$/.test(noSep) ? noSep.toUpperCase() : null;
+    };
+  }
+
+  function clamp(n,min,max){ return Math.max(min, Math.min(max,n)); }
+  function _readAll(){ try{ return JSON.parse(localStorage.getItem(TH_NS)||'{}'); }catch{ return {}; } }
+  function _writeAll(obj){ localStorage.setItem(TH_NS, JSON.stringify(obj)); }
+
+  /** tagId(콜론/하이픈 OK) 기준 임계값 로드 */
+  function getTempThresholdFor(tagId){
+    const key = window.macHex12(tagId);
+    const all = _readAll();
+    const th  = (key && all[key]) ? all[key] : { low:DEF_LOW, high:DEF_HIGH };
+    let low  = Number(th.low),  high = Number(th.high);
+    if (!Number.isFinite(low))  low  = DEF_LOW;
+    if (!Number.isFinite(high)) high = DEF_HIGH;
+    low  = clamp(Math.round(low),  ABS_MIN, ABS_MAX);
+    high = clamp(Math.round(high), ABS_MIN, ABS_MAX);
+    if (low > high){ const t=low; low=high; high=t; }
+    return { low, high };
+  }
+
+  /** tagId 임계값 저장 + 브로드캐스트 */
+  function setTempThresholdFor(tagId, low, high){
+    const key = window.macHex12(tagId);
+    if (!key) return;
+    low  = clamp(Math.round(low),  ABS_MIN, ABS_MAX);
+    high = clamp(Math.round(high), ABS_MIN, ABS_MAX);
+    if (low > high){ const t=low; low=high; high=t; }
+    const all = _readAll(); all[key] = { low, high }; _writeAll(all);
+    window.dispatchEvent(new CustomEvent('sj:temp-threshold-changed', { detail:{ id:key, low, high } }));
+  }
+
+  // 외부에서도 사용 가능하도록 노출(디자인/실시간 등)
+  window.getTempThresholdFor = getTempThresholdFor;
+  window.setTempThresholdFor = setTempThresholdFor;
+
+  /** 태그별 임계값으로 상태 텍스트 판정 */
+  function stateOfTemp(t, tagId){
+    const x = Number(t);
+    if (!Number.isFinite(x)) return '—';
+    if (x < ABS_MIN || x > ABS_MAX) return '이상';
+    const { low, high } = getTempThresholdFor(tagId ?? window.__CURRENT_TAG_KEY ?? '');
+    if (x > high) return '높음';
+    if (x < low)  return '낮음';
+    return '정상';
+  }
+  window.stateOfTemp = stateOfTemp;
+
+  // ----- 슬라이더/라벨 DOM -----
+  const $bar      = document.getElementById('tempRangeBar');
+  const $low      = document.getElementById('thLow');
+  const $high     = document.getElementById('thHigh');
+  const $lowNum   = document.getElementById('thLowNum');
+  const $highNum  = document.getElementById('thHighNum');
+  const $lowLbl   = document.getElementById('thLowLabel');
+  const $highLbl  = document.getElementById('thHighLabel');
+
+  function pct(v){ return ((v - ABS_MIN) / (ABS_MAX - ABS_MIN)) * 100; }
+  function paintBar(low, high){
+    if (!$bar) return;
+    const p1 = pct(low).toFixed(2), p2 = pct(high).toFixed(2);
+    $bar.style.background =
+      `linear-gradient(to right,#FF8700 0%,#FF8700 ${p1}%,#1E88E5 ${p1}%,#1E88E5 ${p2}%,#FF8700 ${p2}%,#FF8700 100%)`;
+  }
+
+  // 현재 선택된 태그(12HEX)
+  let TEMP_TH = { low:DEF_LOW, high:DEF_HIGH };
+  window.__CURRENT_TAG_KEY = null;
+
+  function syncUIFromStore(){
+    if (!$bar) return; // 카드가 없거나 숨김인 경우
+    const th = getTempThresholdFor(window.__CURRENT_TAG_KEY);
+    TEMP_TH = th;
+    $low.value  = th.low;  $high.value = th.high;
+    $lowNum.value = th.low; $highNum.value = th.high;
+    $lowLbl.textContent = th.low; $highLbl.textContent = th.high;
+    paintBar(th.low, th.high);
+  }
+
+  function onChange(low, high){
+    low  = clamp(Math.round(low),  ABS_MIN, ABS_MAX);
+    high = clamp(Math.round(high), ABS_MIN, ABS_MAX);
+    if (low > high) { const t=low; low=high; high=t; }
+    TEMP_TH = { low, high };
+    // 태그가 선택돼 있을 때만 저장(선택 전엔 저장 생략)
+    if (window.__CURRENT_TAG_KEY) {
+      setTempThresholdFor(window.__CURRENT_TAG_KEY, low, high);
+    }
+    syncUIFromStore();
+  }
+
+  // UI 이벤트 바인딩
+  if ($bar){
+    $low.addEventListener('input',  () => onChange($low.value,  $high.value));
+    $high.addEventListener('input', () => onChange($low.value,  $high.value));
+    $lowNum.addEventListener('change',  () => onChange($lowNum.value,  $highNum.value));
+    $highNum.addEventListener('change', () => onChange($lowNum.value,  $highNum.value));
+  }
+
+  // 다른 탭/페이지에서 변경되면 내 UI도 맞춰주기
+  window.addEventListener('storage', (e)=>{ if (e.key === TH_NS) syncUIFromStore(); });
+  window.addEventListener('sj:temp-threshold-changed', (e)=>{
+    const changed = e?.detail?.id || null;
+    if (!changed || changed === window.__CURRENT_TAG_KEY) syncUIFromStore();
+  });
+
+  // 외부에서 현재 선택 태그를 바꿀 수 있게 함수 제공
+  function setActiveTempDevice(rawId){
+    const key = window.macHex12(rawId);
+    window.__CURRENT_TAG_KEY = key;
+
+    // ✅ B 섹션과 온도 카드 동시 토글
+    const show = !!key; // 디바이스 선택됐으면 true
+    const bSection = document.getElementById('section-b');
+    const tempCard = document.getElementById('temp-threshold-card');
+
+    if (bSection) bSection.classList.toggle('hidden', !show);
+    if (tempCard) tempCard.classList.toggle('hidden', !show);
+
+    // 온도/배터리 UI 동기화
+    syncUIFromStore();
+    if (typeof syncBattUIFromStore === 'function') syncBattUIFromStore();
+  }
+  window.__setActiveTempDevice = setActiveTempDevice;
+</script>
+
+  <!-- ▼ 배터리 임계값 로직 (태그별 저장/슬라이더/판정) -->
+  <script>
+    const BATT_NS = 'batt_th_by_tag_v1';
+    const BATT_MIN_PCT = 0, BATT_MAX_PCT = 100;
+    const BATT_DEF_MIN_PCT = 20;  // 기본: 20% 미만이면 충전 필요
+
+    // 전압→% 변환: 2.6V=0%, 3.3V=100% (선형)
+    function battVoltageToPercent(v){
+      if (v == null || !Number.isFinite(Number(v))) return null;
+      const Vmin = 0, Vmax = 3.3;
+      let pct = (v - Vmin) / (Vmax - Vmin) * 100;
+      if (!Number.isFinite(pct)) return null;
+      pct = Math.max(0, Math.min(100, pct));
+      return Math.round(pct);
+    }
+
+    // 스토리지
+    function _battReadAll(){ try{ return JSON.parse(localStorage.getItem(BATT_NS)||'{}'); }catch{ return {}; } }
+    function _battWriteAll(obj){ localStorage.setItem(BATT_NS, JSON.stringify(obj)); }
+
+    function getBattThresholdFor(tagId){
+      const key = window.macHex12(tagId);
+      const all = _battReadAll();
+      const th  = (key && all[key]) ? all[key] : { minPct:BATT_DEF_MIN_PCT };
+      let minPct = Number(th.minPct);
+      if (!Number.isFinite(minPct)) minPct = BATT_DEF_MIN_PCT;
+      minPct = Math.max(BATT_MIN_PCT, Math.min(BATT_MAX_PCT, Math.round(minPct)));
+      return { minPct };
+    }
+
+    function setBattThresholdFor(tagId, minPct){
+      const key = window.macHex12(tagId);
+      if (!key) return;
+      minPct = Math.max(BATT_MIN_PCT, Math.min(BATT_MAX_PCT, Math.round(minPct)));
+      const all = _battReadAll(); all[key] = { minPct }; _battWriteAll(all);
+      window.dispatchEvent(new CustomEvent('sj:batt-threshold-changed', { detail:{ id:key, minPct } }));
+    }
+
+    // 외부에서도 사용 가능하게 노출
+    window.getBattThresholdFor = getBattThresholdFor;
+    window.setBattThresholdFor = setBattThresholdFor;
+
+    // 상태 텍스트(최근 전압 → %) vs 임계%
+    function stateOfBattByPct(vVolt, tagId){
+      const pct = battVoltageToPercent(vVolt);
+      if (pct==null) return { label:'—', pct:null, need:null };
+      const { minPct } = getBattThresholdFor(tagId ?? window.__CURRENT_TAG_KEY ?? '');
+      const need = (pct < minPct);
+      return { label: need ? '충전 필요' : '정상', pct, need };
+    }
+
+    // ----- 배터리 바 DOM -----
+    const $battBar   = document.getElementById('battRangeBar');
+    const $battTh    = document.getElementById('battTh');
+    const $battThNum = document.getElementById('battThNum');
+    const $battThLbl = document.getElementById('battThLabel');
+
+    const $battNowV    = document.getElementById('battNowV');
+    const $battNowPct  = document.getElementById('battNowPct');
+    const $battNowStat = document.getElementById('battNowState');
+
+    function paintBattBar(minPct){
+      if (!$battBar) return;
+      const p = Math.max(0, Math.min(100, Number(minPct)||0)).toFixed(2);
+      // minPct 이하(왼쪽)는 주황(#FF8700), 이상(오른쪽)은 파랑(#1E88E5)
+      $battBar.style.background =
+        `linear-gradient(to right,#FF8700 0%,#FF8700 ${p}%,#1E88E5 ${p}%,#1E88E5 100%)`;
+    }
+
+    function syncBattUIFromStore(){
+      if (!$battBar) return;
+      const th = getBattThresholdFor(window.__CURRENT_TAG_KEY);
+      $battTh.value = th.minPct;
+      $battThNum.value = th.minPct;
+      $battThLbl.textContent = th.minPct;
+      paintBattBar(th.minPct);
+    }
+
+    function onBattChange(nextPct){
+      nextPct = Math.max(BATT_MIN_PCT, Math.min(BATT_MAX_PCT, Math.round(Number(nextPct)||BATT_DEF_MIN_PCT)));
+      if (window.__CURRENT_TAG_KEY){
+        setBattThresholdFor(window.__CURRENT_TAG_KEY, nextPct);
+      }
+      syncBattUIFromStore();
+      // 현재 상태 라벨도 즉시 갱신 (최근 측정치 기준)
+      if (window.__LAST_BATT_V != null){
+        const st = stateOfBattByPct(window.__LAST_BATT_V, window.__CURRENT_TAG_KEY);
+        applyBattNowState(window.__LAST_BATT_V, st.pct, st.label);
+      }
+    }
+
+    if ($battBar){
+      $battTh?.addEventListener('input', ()=> onBattChange($battTh.value));
+      $battThNum?.addEventListener('change', ()=> onBattChange($battThNum.value));
+    }
+
+    // 스토리지/브로드캐스트 반영
+    window.addEventListener('storage', (e)=>{ if (e.key === BATT_NS) syncBattUIFromStore(); });
+    window.addEventListener('sj:batt-threshold-changed', (e)=>{
+      const changed = e?.detail?.id || null;
+      if (!changed || changed === window.__CURRENT_TAG_KEY) syncBattUIFromStore();
+    });
+
+    // 온도 임계값 섹션에서 쓰던 선택 연계 함수에 배터리도 동기화 추가
+    const __origSetActiveTempDevice = window.__setActiveTempDevice;
+    window.__setActiveTempDevice = function(rawId){
+      __origSetActiveTempDevice(rawId);
+      syncBattUIFromStore();
+    };
+
+    // B 섹션의 "현재 배터리 상태" 렌더
+    function applyBattNowState(vVolt, pct, label){
+      if ($battNowV)   $battNowV.textContent   = (vVolt!=null) ? vVolt.toFixed(2) : '—';
+      if ($battNowPct) $battNowPct.textContent = (pct!=null) ? pct : '—';
+      if ($battNowStat){
+        $battNowStat.textContent = label || '—';
+        $battNowStat.className = 'font-medium ' + (label==='충전 필요' ? 'text-red-600' : label==='정상' ? 'text-green-600' : 'text-gray-600');
+      }
+    }
+  </script>
+
+
+  <!-- ===== 로직 + WS 수신 ===== -->
+  <script>
+  // ====== 설정 ======
+  const API_BASE = 'https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev';
+  const COLLECTION_PATH   = 'calculated_locations';
+  const DEVICE_LIST_PATH  = 'calculated_locations';
+  const WS_URL            = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
+  const ALLOWED_API       = "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed";
+
+  const SKY = '#87CEFA', SKY_TOP='rgba(135,206,250,.35)', SKY_BOT='rgba(135,206,250,.07)';
+
+  const normId  = s => String(s || '').toUpperCase().trim();
+  const isAdmin = () => { try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; } };
+
+  // ====== 허용 태그 로더(서버) ======
+  function currentEmail(){ try{ return sessionStorage.getItem('app_user_email') || ''; } catch { return ''; } }
+  async function getIdToken(){
+    return new Promise(resolve=>{
+      try{
+        const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+        const u = pool.getCurrentUser();
+        if (!u) return resolve('');
+        u.getSession((err,s)=>{ if(err||!s||!s.isValid()) return resolve(''); resolve(s.getIdToken().getJwtToken());});
+      }catch{ resolve(''); }
+    });
+  }
+
+  let __ALLOWED_TAG_KEYS = new Set(); // 12HEX 키 집합
+  let __ALLOWED_READY    = false;
+  window.__ALLOWED_TAG_IDS = [];
+  window.__ALLOWED_READY   = false;
+
+  // 구분자 제거 후 12자리 16진수인지 엄격 검사
+  function macHex12(raw){
+    const s = String(raw||'').trim();
+    const noSep = s.replace(/[:\-\.]/g, '');
+    if (!/^[0-9A-Fa-f]{12}$/.test(noSep)) return null;
+    return noSep.toUpperCase();
+  }
+
+  // 표시용: 12자리면 콜론 포맷, 아니면 원본
+  function macPretty(raw){
+    const h = macHex12(raw);
+    if (h) return h.match(/.{2}/g).join(':');
+    return String(raw||'');
+  }
+
+  async function fetchAllowedTagIdsFromServer(){
+    const me = currentEmail();
+    __ALLOWED_TAG_KEYS = new Set();
+    if (!me) { __ALLOWED_READY = true; return; }
+
+    const token = await getIdToken();
+    const url = new URL(ALLOWED_API);
+    url.searchParams.set('user_id', me);
+    url.searchParams.set('scope', isAdmin() ? 'all' : 'descendants');
+    url.searchParams.set('include_owner', '1');
+
+    try{
+      const res = await fetch(url.toString(), {
+        method:'GET',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        mode:'cors'
+      });
+      const data = await res.json().catch(()=> ({}));
+      if (res.ok && data && data.tags){
+        const raw = Array.isArray(data.tags) ? data.tags : [];
+        for (const t of raw){
+          const rawId = (typeof t === 'string') ? t : (t?.tag_mac || t?.id || t?.mac || t?.tagMac);
+          const k = macHex12(rawId);
+          if (k) __ALLOWED_TAG_KEYS.add(k);
+          else console.warn('[allowed] invalid mac skipped:', rawId);
+        }
+      } else {
+        console.warn('[allowed] non-ok:', res.status, data);
+      }
+    }catch(e){
+      console.error('[allowed] fetch error:', e);
+    }finally{
+      __ALLOWED_READY = true;
+      window.__ALLOWED_TAG_IDS = [...__ALLOWED_TAG_KEYS];
+      window.__ALLOWED_READY   = true;
+      window.SJUI?.TickerHub?.refreshFilter?.();
+    }
+  }
+
+  async function prepareAllowedTags(){ await fetchAllowedTagIdsFromServer(); }
+  function isAllowedDevice(id){
+    if (!id || !__ALLOWED_READY) return false;
+    const k = macHex12(id);
+    return !!(k && __ALLOWED_TAG_KEYS.has(k));
+  }
+
+  // ====== 유틸 ======
+  const fmtKST = (ms)=> new Intl.DateTimeFormat('ko-KR',{ timeZone:'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', second:'2-digit' }).format(ms);
+  function pickTs(x){ let t = x.timestamp ?? x.ts ?? x.timestamp_epoch ?? x.time; t = Number(t); return Number.isFinite(t) ? (t<1e12?t*1000:t) : null; }
+  function pickTemp(x){ const v = Number(x.temperature ?? x.temp); return Number.isFinite(v) ? v : null; }
+  function pickBatt(x){ let v = x.battery_voltage ?? x.battery; v = Number(v); if (!Number.isFinite(v)) return null; return v>20 ? v/1000 : v; }
+  function pickLat(x){ const v = Number(x.latitude); return Number.isFinite(v) ? v : null; }
+  function pickLng(x){ const v = Number(x.longitude ?? x.longtitude); return Number.isFinite(v) ? v : null; }
+
+  // ====== DOM ======
+  const daysSel    = document.getElementById('days');
+  const btnConfirm = document.getElementById('btnConfirm');
+  const deviceSel  = document.getElementById('deviceSelect');
+
+  // URL 파라미터
+  const qs = new URLSearchParams(location.search);
+  let device = qs.get('device') || '';
+  const urlDays = qs.get('days');
+
+  function updateConfirmState(){ btnConfirm.disabled = !(deviceSel.value && daysSel.value); }
+  function setSubtitle(v){ document.getElementById('subTitle').textContent = v ? `디바이스: ${v}` : '—'; }
+
+  // ====== 차트 ======
+  let tempChart, battChart;
+  function makeOpts(name, unit){
+    return {
+      animation:false,
+      color:[SKY],
+      tooltip:{ trigger:'axis', valueFormatter:v=>v==null?'—':`${v} ${unit}` },
+      grid:{top:16,right:12,bottom:30,left:50},
+      xAxis:{ type:'time', axisLine:{lineStyle:{color:'#e5e7eb'}}, axisLabel:{color:'#6b7280'} },
+      yAxis:{ type:'value', axisLabel:{color:'#6b7280'}, splitLine:{lineStyle:{color:'#f3f4f6'}} },
+      series:[{
+        name, type:'line', smooth:true, symbol:'none',
+        lineStyle:{width:3, color:SKY},
+        areaStyle:{ color: new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:SKY_TOP},{offset:1,color:SKY_BOT}]) },
+        data:[]
+      }]
+    };
+  }
+  const BUCKET_BY_DAYS = { 1: 3600000, 3: 3600000, 7: 3600000 };
+  function bucketizeFixedWindow(pairs, bucketMs, start, end){
+    const out = []; for (let t = start; t < end; t += bucketMs) out.push([t, null]);
+    if (!pairs || !pairs.length) return out;
+    const arr = pairs.slice().sort((a,b)=>a[0]-b[0]);
+    let i = 0; while (i < arr.length && arr[i][0] < start) i++;
+    for (let bi = 0, t = start; t < end; bi++, t += bucketMs){
+      const next = Math.min(t + bucketMs, end);
+      let sum = 0, cnt = 0;
+      while (i < arr.length && arr[i][0] < next){
+        const v = arr[i][1]; if (v != null && Number.isFinite(v)) { sum += v; cnt++; }
+        i++;
+      }
+      if (cnt) out[bi][1] = sum / cnt;
+    }
+    return out;
+  }
+  function initCharts(){
+    battChart = echarts.init(document.getElementById('battChart'));
+    tempChart = echarts.init(document.getElementById('tempChart'));
+    battChart.setOption(makeOpts('배터리','V'));
+    tempChart.setOption(makeOpts('온도','°C'));
+    addEventListener('resize', ()=>{ battChart.resize(); tempChart.resize(); });
+  }
+
+  // ====== 지도(Leaflet) ======
+  let routeMap, routePolyline, routeStart, routeEnd;
+  function ensureRouteMap(){
+    if (routeMap) return routeMap;
+    routeMap = L.map('routeMap');
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(routeMap);
+    routePolyline = L.polyline([], { color:'#1E88E5', weight:4, opacity:0.9 }).addTo(routeMap);
+    return routeMap;
+  }
+  function drawRoute(items){
+    const $stats = document.getElementById('routeStats');
+    const ptsAll = items.filter(_=> Number.isFinite(_.lat) && Number.isFinite(_.lng)).sort((a,b)=> a.__ts - b.__ts);
+    if (!ptsAll.length){
+      ensureRouteMap(); routePolyline.setLatLngs([]);
+      if (routeStart) { routeStart.remove(); routeStart=null; }
+      if (routeEnd)   { routeEnd.remove();   routeEnd=null; }
+      $stats.textContent = '표시할 위치 데이터가 없습니다.'; return;
+    }
+    const MAX_POINTS = 1000;
+    let pts = ptsAll; if (ptsAll.length > MAX_POINTS){ const step = Math.ceil(ptsAll.length / MAX_POINTS); pts = ptsAll.filter((_,i)=> i % step === 0); }
+    const latlngs = pts.map(p => [p.lat, p.lng]);
+    ensureRouteMap(); routePolyline.setLatLngs(latlngs);
+    if (routeStart) routeStart.remove(); if (routeEnd) routeEnd.remove();
+    routeStart = L.marker(latlngs[0], { title: '시작' }).addTo(routeMap);
+    routeEnd   = L.marker(latlngs[latlngs.length-1], { title: '마지막' }).addTo(routeMap);
+    routeMap.fitBounds(routePolyline.getBounds(), { padding:[20,20] }); setTimeout(()=> routeMap.invalidateSize(), 0);
+    const firstTs = pts[0].__ts, lastTs = pts[pts.length-1].__ts;
+    $stats.textContent = `표시 포인트: ${pts.length} · 범위: ${fmtKST(firstTs)} ~ ${fmtKST(lastTs)}`;
+  }
+
+  // ====== 에러 체크용 상태(Map) + WS 수신 ======
+  const devices = new Map();
+  let knownIds = [];
+
+  // 공통 전광판에서 참조
+  window.devices  = devices;
+  window.knownIds = knownIds;
+
+  function handleWsMessage(raw){
+    try{
+      const msg = JSON.parse(raw);
+      const rawId = msg.tag_address || msg.device_id || msg.id;
+      if (rawId){
+        const k = macHex12(rawId);
+        if (k && __ALLOWED_TAG_KEYS.has(k)){
+          if (!knownIds.includes(k)) { knownIds.push(k); knownIds.sort(); }
+          const next = devices.get(k) || {};
+          const now = Date.now();
+          devices.set(k, {
+            ...next,
+            error_code: (msg.error_code ?? next.error_code),
+            lastWsTs: now,
+            ts: now
+          });
+        }
+      }
+      window.updateTicker && window.updateTicker();
+    }catch(e){
+      console.error('WS parse error:', e, raw);
+    }
+  }
+
+  let ws, retry=0;
+  function connectWS(){
+    ws = new WebSocket(WS_URL);
+    ws.onopen = ()=>{ retry=0; };
+    ws.onmessage = (ev)=> handleWsMessage(ev.data);
+    ws.onclose = ()=> setTimeout(connectWS, Math.min(1000*(++retry), 10000));
+    ws.onerror = ()=> ws.close();
+  }
+
+  // ====== 디바이스 목록 로딩 ======
+  async function loadDevices({ preserveSelection = true } = {}) {
+    const prevLabel = preserveSelection ? (device || deviceSel.value || '') : '';
+    const prevKey   = macHex12(prevLabel);
+
+    try{
+      const url = `${API_BASE}/${DEVICE_LIST_PATH}?t=${Date.now()}`;
+      const res = await fetch(url, { mode:'cors' });
+      const raw = await res.text();
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      let data; try { data = JSON.parse(raw); } catch { throw new Error('Invalid JSON'); }
+
+      const all = Array.isArray(data?.devices) ? data.devices : (Array.isArray(data) ? data : []);
+      const allByKey = new Map();
+      for (const s of all){
+        const k = macHex12(s);
+        if (k && !allByKey.has(k)) allByKey.set(k, macPretty(k));
+      }
+
+      const listKeys = [...__ALLOWED_TAG_KEYS];
+
+      // 드롭다운 갈아끼우기
+      while (deviceSel.options.length > 1) deviceSel.remove(1);
+      for (const k of listKeys){
+        const label = allByKey.get(k) || macPretty(k);
+        const opt = document.createElement('option');
+        opt.value = label;
+        opt.textContent = allByKey.get(k) ? label : `${label} (데이터 없음)`;
+        deviceSel.appendChild(opt);
+      }
+
+      // 전광판용
+      knownIds = listKeys.filter(k => allByKey.has(k)).sort();
+      for (const id of knownIds){ if (!devices.has(id)) devices.set(id, {}); }
+      window.knownIds = knownIds;
+      window.SJUI?.TickerHub?.refreshFilter?.();
+      window.updateTicker && window.updateTicker();
+
+      let restored = false;
+      if (preserveSelection && prevKey && listKeys.includes(prevKey)) {
+        const label = macPretty(prevKey);
+        if ([...deviceSel.options].some(o => o.value === label)) {
+          deviceSel.value = label;
+          setSubtitle(label);
+          // 임계값/현재값 UI도 유지
+          window.__setActiveTempDevice(label);
+          restored = true;
+        }
+      }
+
+      if (!restored) setSubtitle('');
+    }catch(e){
+      console.error('loadDevices failed:', e);
+      deviceSel.innerHTML = `<option value="" disabled selected>디바이스 없음</option>`;
+      knownIds = [];
+      window.knownIds = knownIds;
+      window.SJUI?.TickerHub?.refreshFilter?.();
+      window.updateTicker && window.updateTicker();
+      setSubtitle('');
+    }finally{
+      updateConfirmState();
+    }
+  }
+
+
+  // ====== 최신 1건 로딩(디바이스만 선택해도 표시) ======
+  let latestTimer = null;
+
+  async function fetchLatestSampleForStatus(deviceLabel){
+    // 디바이스/권한 체크
+    if (!deviceLabel || !isAllowedDevice(deviceLabel)) {
+      window.__LAST_BATT_V = null;
+      applyBattNowState(null, null, '—');
+      const $tNow = document.getElementById('tempNow');
+      const $tState = document.getElementById('tempNowState');
+      if ($tNow)   $tNow.textContent = '—';
+      if ($tState){
+        $tState.textContent = '—';
+        $tState.className = 'font-medium text-gray-600';
+      }
+      return;
+    }
+
+    // 최근 1건만
+    const url = `${API_BASE}/${COLLECTION_PATH}?tag_address=${encodeURIComponent(deviceLabel)}&days=1&order=desc&limit=1`;
+
+    try{
+      const res = await fetch(url, { mode:'cors' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const rows = Array.isArray(data) ? data : (data.items || []);
+      const r = rows[0];
+
+      // DOM 핸들
+      const $tNow   = document.getElementById('tempNow');
+      const $tState = document.getElementById('tempNowState');
+
+      if (!r){
+        // 값 없음
+        window.__LAST_BATT_V = null;
+        applyBattNowState(null, null, '—');
+        if ($tNow)   $tNow.textContent = '—';
+        if ($tState){
+          $tState.textContent = '—';
+          $tState.className = 'font-medium text-gray-600';
+        }
+        return;
+      }
+
+      // 배터리/온도 추출(페이지의 기존 유틸 재사용)
+      const vBatt = pickBatt(r);
+      const vTemp = pickTemp(r);
+
+      // 배터리 현재 상태 갱신
+      window.__LAST_BATT_V = vBatt;
+      const stBatt = stateOfBattByPct(vBatt, window.__CURRENT_TAG_KEY);
+      applyBattNowState(vBatt, stBatt.pct, stBatt.label);
+
+      // 온도 현재 상태 갱신(임계값 기준)
+      if ($tNow) $tNow.textContent = (vTemp!=null) ? Number(vTemp).toFixed(1) : '—';
+      if ($tState){
+        const label = stateOfTemp(vTemp, window.__CURRENT_TAG_KEY) || '—';
+        $tState.textContent = label;
+        $tState.className = 'font-medium ' + (
+          label==='높음' ? 'text-red-600' :
+          label==='낮음' ? 'text-amber-600' :
+          label==='정상' ? 'text-green-600' : 'text-gray-600'
+        );
+      }
+    }catch(e){
+      console.error('fetchLatestSampleForStatus failed:', e);
+    }
+  }
+
+  function startLatestPolling(){
+    if (latestTimer) clearInterval(latestTimer);
+    if (device) {
+      // 20초마다 최신 1건 갱신 (원하면 10~60초로 조절)
+      latestTimer = setInterval(()=> fetchLatestSampleForStatus(device), 20000);
+    }
+  }
+
+  // ====== 데이터 로딩/렌더링(선택 디바이스) ======
+  async function fetchAndRender(){
+    if (!device) return;
+    const days = Number(daysSel.value || 7);
+    const url  = `${API_BASE}/${COLLECTION_PATH}?tag_address=${encodeURIComponent(device)}&days=${days}`;
+
+    let data;
+    try{
+      const res = await fetch(url, { mode:'cors' });
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      data = await res.json();
+    }catch(e){
+      console.error('fetch failed:', e);
+      alert('데이터 요청에 실패했습니다.');
+      return;
+    }
+
+    const itemsRaw = Array.isArray(data) ? data : (data.items || []);
+    const items = itemsRaw.map(row=>{
+      const ts = pickTs(row);
+      return {
+        __ts: ts,
+        battery: pickBatt(row),
+        temp: Number.isFinite(Number(row.temperature)) ? Number(row.temperature) : pickTemp(row),
+        lat: pickLat(row),
+        lng: pickLng(row)
+      };
+    }).filter(_=>Number.isFinite(_.__ts)).sort((a,b)=>a.__ts - b.__ts);
+
+    const mean = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null;
+    const battVals = items.map(_=>_.battery).filter(v=>v!=null);
+    const tempVals = items.map(_=>_.temp).filter(v=>v!=null);
+
+    const now = Date.now();
+    const c_days = Number(daysSel.value || 7);
+    const start = now - c_days * 24 * 60 * 60 * 1000;
+    const bucketMs = (BUCKET_BY_DAYS && BUCKET_BY_DAYS[c_days]) ? BUCKET_BY_DAYS[c_days] : 24*60*60*1000;
+
+    document.getElementById('statCount').textContent = items.length;
+    document.getElementById('avgBatt').textContent = battVals.length ? mean(battVals).toFixed(2) : '—';
+    document.getElementById('avgTemp').textContent = tempVals.length ? mean(tempVals).toFixed(2) : '—';
+    document.getElementById('statRange').textContent = `${fmtKST(start)} ~ ${fmtKST(now)}`;
+
+    const battPairsRaw = items.filter(_=>_.battery!=null).map(_=>[_.__ts, _.battery]);
+    const tempPairsRaw = items.filter(_=>_.temp!=null).map(_=>[_.__ts, _.temp]);
+
+    const battBuckets = bucketizeFixedWindow(battPairsRaw, bucketMs, start, now);
+    const tempBuckets = bucketizeFixedWindow(tempPairsRaw, bucketMs, start, now);
+
+    battChart.setOption({ xAxis: { min: start, max: now }, series: [{ data: battBuckets }] });
+    tempChart.setOption({ xAxis: { min: start, max: now }, series: [{ data: tempBuckets }] });
+
+    drawRoute(items);
+
+    const lastBattSample = items.slice().reverse().find(_=> _.battery != null);
+    if (lastBattSample){
+      window.__LAST_BATT_V = Number(lastBattSample.battery); // 전역 저장해 두면 슬라이더 바뀔 때 즉시 재계산
+      const st = stateOfBattByPct(window.__LAST_BATT_V, window.__CURRENT_TAG_KEY);
+      applyBattNowState(window.__LAST_BATT_V, st.pct, st.label);
+    } else {
+      window.__LAST_BATT_V = null;
+      applyBattNowState(null, null, '—');
+    }
+  }
+
+  // ====== 이벤트 ======
+  btnConfirm.addEventListener('click', ()=>{
+    if (!deviceSel.value || !daysSel.value) return;
+    if (!isAllowedDevice(deviceSel.value)) return;
+    device = deviceSel.value;
+    const url = new URL(location.href);
+    url.searchParams.set('device', device);
+    url.searchParams.set('days', daysSel.value);
+    history.replaceState(null, '', url);
+    setSubtitle(device);
+    // ★ 디바이스 확정 → 임계값 슬라이더를 해당 태그로 동기화
+    window.__setActiveTempDevice(device);
+    fetchLatestSampleForStatus(device); 
+    startLatestPolling();               
+    fetchAndRender();
+  });
+  deviceSel.addEventListener('change', ()=>{
+    device = deviceSel.value || '';
+    setSubtitle(device);
+    updateConfirmState();
+    // ★ 선택만 바뀌어도 슬라이더 미리 동기화
+    if (device) {
+      window.__setActiveTempDevice(device);
+      fetchLatestSampleForStatus(device); // ★ 추가: 디바이스만 바뀌어도 최신 1건 즉시 표시
+      startLatestPolling();               // ★ 추가: 주기 갱신 시작
+    } else {
+      if (latestTimer) clearInterval(latestTimer);
+    }
+  });
+  daysSel.addEventListener('change', updateConfirmState);
+
+  // ====== 시작 ======
+  (async ()=>{
+    try{
+      const email = sessionStorage.getItem('app_user_email');
+      if (email) {
+        const box  = document.getElementById('sidebar-greet');
+        const name = document.getElementById('sidebar-greet-name');
+        if (box && name) { name.textContent = email; box.classList.remove('hidden'); }
+      }
+    }catch{}
+
+    // 공통 헤더 로테이터 준비
+    (function waitSJUI(){
+      if (!window.SJUI) return setTimeout(waitSJUI, 20);
+      window.SJUI.mountRotators?.();
+    })();
+
+    initCharts();
+
+    // 허용 태그 → 디바이스 목록
+    await prepareAllowedTags();
+    await loadDevices();
+
+    // 1분마다 허용목록 재조회
+    let __lastAllowedJson = '[]';
+    setInterval(async () => {
+      await fetchAllowedTagIdsFromServer();
+      const nowJson = JSON.stringify([...__ALLOWED_TAG_KEYS]);
+      if (nowJson !== __lastAllowedJson) {
+        __lastAllowedJson = nowJson;
+        window.__ALLOWED_TAG_IDS = [...__ALLOWED_TAG_KEYS];
+        window.__ALLOWED_READY   = true;
+        window.SJUI?.TickerHub?.refreshFilter?.();
+        await loadDevices({ preserveSelection: true });  // ★ 선택 유지
+      }
+    }, 60_000);
+
+    // 전광판 초기 1회 + WS 연결
+    window.updateTicker && window.updateTicker();
+    connectWS();
+
+    // URL 파라미터 있으면 자동 로딩
+    const urlDays = new URLSearchParams(location.search).get('days');
+    if (device && ['1','3','7'].includes(urlDays||'') && isAllowedDevice(device)) {
+      if ([...deviceSel.options].some(o=>o.value===device)) deviceSel.value = device;
+      daysSel.value = urlDays;
+      updateConfirmState();
+      setSubtitle(device);
+      // ★ 자동 진입 시에도 현재 태그로 임계값 UI 동기화
+      window.__setActiveTempDevice(device);
+      await fetchLatestSampleForStatus(device); // ★ 추가: 기간 조회 전에 현재값 즉시
+      startLatestPolling();
+      await fetchAndRender();
+    } else {
+      device = ''; setSubtitle(''); updateConfirmState();
+      // ★ 선택 전에는 기본값(0~35)로 보여줌
+      window.__setActiveTempDevice(null);
+    }
+  })();
+  </script>
+</body>
+</html>

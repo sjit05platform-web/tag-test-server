@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <!-- ▼▼▼ 보호 페이지 공통: <head> 맨 위에 넣기 ▼▼▼ -->
+  <meta charset="UTF-8" />
+  <style> html.auth-check { visibility: hidden } </style>
+  <style>
+  /* ...전광판 페이드인 */
+  #hdr-rotator{ position:relative; min-height:24px; }
+  #hdr-rotator .rot-line{
+    position:absolute; inset:0;
+    opacity:0; transform:translateY(8px);
+    transition:opacity .4s ease, transform .4s ease;
+    will-change:opacity,transform;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #hdr-rotator .rot-line.show{
+    opacity:1; transform:translateY(0);
+  }
+</style>
+
+  <script>
+    // UI 깜빡임 방지: 인증 끝날 때까지 숨김
+    document.documentElement.classList.add('auth-check');
+
+    // 로그인 페이지 경로 (필요시 상대경로 조정)
+    window.__LOGIN_PAGE__ = 'login.html';
+
+    // Cognito User Pool 설정
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft', // ← 실제 값
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota', // ← 실제 값
+    };
+  </script>
+
+  <!-- Cognito SDK들 (순서 중요) -->
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <!-- 인증 가드 -->
+  <script>
+    (function authGuard() {
+      function goLogin() {
+        const u = new URL(window.__LOGIN_PAGE__, location.href);
+        u.searchParams.set('redirect', location.href); // 로그인 후 돌아올 곳
+        location.replace(u.toString());
+      }
+
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity){ return setTimeout(waitLib, 20); }
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+
+          // 🔸 브라우저 세션 플래그가 없으면 강제 재로그인
+          if (!sessionStorage.getItem('app_session')) {
+            const u = pool.getCurrentUser();
+            if (u) { try { u.signOut(); } catch(e){} }
+            return goLogin();
+          }
+
+          const user = pool.getCurrentUser();
+          if (!user) return goLogin();
+
+          user.getSession(function(err, session){
+            if (err || !session || !session.isValid()) return goLogin();
+
+            try {
+              const groups = (session.getIdToken().payload || {})['cognito:groups'] || [];
+              sessionStorage.setItem('app_is_admin', groups.includes('admin') ? '1' : '0');
+            } catch {}
+
+            // 페이지 표시
+            document.documentElement.classList.remove('auth-check');
+
+            // ✅ 이메일 저장 + 인사말 표시 (공통 주입 함수로 호출)
+            user.getUserAttributes(function(e, attrs){
+              let email = (typeof user.getUsername === 'function') ? user.getUsername() : '';
+              if (!e && Array.isArray(attrs)) {
+                const em = attrs.find(a => (a.getName && a.getName() === 'email') || a?.Name === 'email');
+                if (em) email = (em.getValue ? em.getValue() : em.Value);
+              }
+              try { sessionStorage.setItem('app_user_email', email); } catch {}
+              try { window.__showSidebarGreet && window.__showSidebarGreet(email); } catch {}
+            });
+          });
+        }catch(e){ goLogin(); }
+      })();
+    })();
+  </script>
+  <!-- ▲▲▲ 여기까지가 '무조건 로그인 먼저' 가드 ▲▲▲ -->
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tag Monitor</title>
+
+  <!-- 아이콘/폰트/유틸 -->
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { primary:'#1E88E5', secondary:'#F5F6FA' },
+          borderRadius: {
+            'none':'0px','sm':'4px', DEFAULT:'8px','md':'12px','lg':'16px',
+            'xl':'20px','2xl':'24px','3xl':'32px','full':'9999px','button':'8px'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- ★ 공통 UI CSS -->
+  <link rel="stylesheet" href="./ui-common.css" />
+
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc}
+    .mono{font-family:'Roboto Mono',monospace}
+  </style>
+</head>
+
+<body>
+  <!-- ★ 공통 레이아웃(sj-shell) + 사이드바/메인 -->
+  <div class="sj-shell">
+    <!-- 공통 사이드바: 자동 렌더 -->
+    <aside class="sj-sidebar" data-sj-sidebar></aside>
+
+    <!-- 메인 -->
+    <main class="sj-main">
+      <!-- 공통형 헤더 -->
+      <header class="sj-header">
+        <div class="sj-title text-sm">
+          
+        </div>
+
+        <!-- ★ 전광판(공통 로테이터) -->
+        <div data-sj-rotator id="hdr-rotator" class="w-[240px] sm:w-[320px] md:w-[480px]"></div>
+      </header>
+
+      <!-- 페이지 콘텐츠 -->
+      <section class="p-6">
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-xl font-bold text-gray-800">태그 목록</h2>
+          <div class="text-sm text-gray-500"><span id="count">—</span></div>
+        </div>
+
+        <!-- 검색/정렬 바 -->
+        <div class="bg-white rounded-lg shadow-sm p-4 mb-4 flex flex-wrap gap-3 items-center">
+          <div class="flex items-center gap-2">
+            <i class="ri-search-line text-gray-500"></i>
+            <input id="q" type="text" placeholder="태그 MAC / 소유자 검색"
+                   class="px-3 py-2 border rounded-md text-sm w-60 outline-none focus:ring-2 focus:ring-primary/30">
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-sm text-gray-600">정렬:</label>
+            <select id="sort" class="px-3 py-2 border rounded-md text-sm">
+              <option value="time_desc">최근 갱신 ↓</option>
+              <option value="time_asc">최근 갱신 ↑</option>
+              <option value="id_asc">ID 오름차순</option>
+              <option value="id_desc">ID 내림차순</option>
+              <option value="temp_desc">온도 ↓</option>
+              <option value="batt_desc">배터리 ↓</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 표 -->
+        <div class="bg-white rounded-lg shadow-sm overflow-hidden">
+          <table class="min-w-full text-sm">
+            <thead class="bg-gray-50 text-gray-600">
+              <tr>
+                <th class="px-4 py-2 text-left">태그 ID</th>
+                <th class="px-4 py-2 text-left">소유자</th>
+                <th class="px-4 py-2 text-left">온도</th>
+                <th class="px-4 py-2 text-left">배터리</th>
+                <th class="px-4 py-2 text-left">상태</th>
+                <th class="px-4 py-2 text-left">지도</th>
+                <th class="px-4 py-2 text-left">마지막 갱신</th>
+                <th class="px-4 py-2"></th>
+              </tr>
+            </thead>
+            <tbody id="rows" class="divide-y divide-gray-100"></tbody>
+          </table>
+        </div>
+        <!-- ▼ 페이지네이션 -->
+        <div id="pager" class="px-3 py-3 flex items-center justify-center gap-1 text-sm select-none"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ★ 공통 UI JS (autoInit로 사이드바/로테이터 자동 바인딩) -->
+  <script type="module" src="./ui-common.js"></script>
+
+  <!-- ★ 사이드바 항목 구성 -->
+  <script>
+    window.__SJ_SIDEBAR__ = {
+      logo: { text: 'Tag Monitor', href: 'design.html', iconSrc: '', version: 'v0.1' },
+      search: false,
+      sections: [
+        { title: 'Main', items: [
+          { icon: 'ri-time-line',         label: '실시간 대시보드', href: 'design.html',  activeMatch: 'design.html' },
+          { icon: 'ri-device-line',       label: '디바이스 상세',   href: 'detail.html',  activeMatch: 'detail.html' },
+          { icon: 'ri-price-tag-3-line',  label: '태그',            href: 'tag.html',     activeMatch: 'tag.html' },
+          { icon: 'ri-rfid-line',         label: '게이트웨이',      href: 'gateway.html', activeMatch: 'gateway.html' },
+          { icon: 'ri-alarm-warning-line',label: '알람',            href: 'alarm.html',   activeMatch: 'alarm.html' },
+          { icon: 'ri-settings-3-line',   label: '설정',            href: 'setting.html', activeMatch: 'setting.html' }
+        ] }
+      ],
+      initiallyOpen: false
+    };
+  </script>
+
+  <!-- ★ 인사말 슬롯 주입 (공통 사이드바 렌더 후) -->
+  <script>
+    (function mountGreetSlot(){
+      function inject(){
+        const root = document.querySelector('[data-sj-sidebar]');
+        if (!root || document.getElementById('sidebar-greet')) return;
+        const logo = root.querySelector('.sj-sidebar__logo');
+        const box  = document.createElement('div');
+        box.id = 'sidebar-greet';
+        box.className = 'px-4 py-1 text-[12px] text-gray-700 hidden';
+        box.innerHTML = '<span id="sidebar-greet-name"></span>님 안녕하세요!';
+        // 로고 바로 아래에 꽂기
+        if (logo && logo.parentNode) {
+          logo.parentNode.insertBefore(box, logo.nextSibling);
+        } else {
+          root.appendChild(box);
+        }
+      }
+      const run = () => setTimeout(inject, 0); // SJUI.autoInit 직후 렌더 보장
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run, { once: true });
+      } else {
+        run();
+      }
+
+      // 인증가드/페이지 어디서든 호출 가능
+      window.__showSidebarGreet = function(email){
+        try{
+          email = email || sessionStorage.getItem('app_user_email') || '';
+          const box  = document.getElementById('sidebar-greet');
+          const name = document.getElementById('sidebar-greet-name');
+          if (box && name && email){ name.textContent = email; box.classList.remove('hidden'); }
+        }catch{}
+      };
+      // 폴백 1회
+      setTimeout(()=> window.__showSidebarGreet && window.__showSidebarGreet(), 400);
+    })();
+  </script>
+
+  <!-- ✅ 공통 전광판 모듈: import + 구독/발행 -->
+  <script type="module">
+    import {
+      buildTickerTextsFromDevices,
+      publishAlerts,
+      subscribeTickerFromOthers,
+      macPretty
+    } from './ticker-common.js';
+
+    // 모든 페이지에서 1회: 외부 발행을 수신
+    subscribeTickerFromOthers();
+
+    function updateTicker() {
+      const texts = buildTickerTextsFromDevices({
+        devicesMap: window.devices ?? new Map(), // Map(id -> { error_code, ts, ... })
+        ids:        window.knownIds ?? [],       // 12HEX 배열
+        activeMs:   60_000,
+        // labeler: (id) => macPretty(id), // 기본값이 macPretty
+      });
+
+      // 문자열 문구들을 안전하게 발행(중복/쿨다운/페이드 제어는 모듈이 처리)
+      publishAlerts(
+        texts.map(t => ({ text: t, level: 'info' })), // 객체/문자열 모두 OK
+        { mode:'replace', staggerMs:1200, broadcast:true }
+      );
+    }
+
+    // 전역에서 호출 가능하도록
+    window.updateTicker = updateTicker;
+
+    // 초기/주기 호출
+    updateTicker();
+    window.__tickerTimer ||= setInterval(updateTicker, 5000);
+  </script>
+
+  <!-- ▼ 태그별 온도 임계값 공통(판정 전용 / UI 없음) -->
+  <script>
+    const TH_NS   = 'temp_th_by_tag_v1';   // detail.html에서 쓰던 네임스페이스 그대로
+    const ABS_MIN = -40, ABS_MAX = 85;     // 센서 절대 범위
+    const DEF_LOW = 0,   DEF_HIGH = 35;    // 기본 정상 구간
+
+    const BATT_NS = 'batt_th_by_tag_v1';
+    const BATT_DEF_MIN_PCT = 20; // 기본: 20% 미만이면 '충전 필요'
+
+    // 다른 곳에서 이미 정의돼 있으면 덮어쓰지 않기
+    if (typeof window.macHex12 !== 'function') {
+      window.macHex12 = function(raw){
+        const s = String(raw||'').trim();
+        const hex = s.toUpperCase().replace(/[^0-9A-F]/g, '');
+        return /^[0-9A-F]{12}$/.test(hex) ? hex : null;
+      };
+    }
+
+    function clamp(n,min,max){ return Math.max(min, Math.min(max,n)); }
+    function _readAll(){ try{ return JSON.parse(localStorage.getItem(TH_NS) || '{}'); }catch{ return {}; } }
+
+    // 태그별 임계값 읽기
+    function getTempThresholdFor(tagId){
+      const key = window.macHex12(tagId);
+      const all = _readAll();
+      const th  = (key && all[key]) ? all[key] : { low:DEF_LOW, high:DEF_HIGH };
+      let low  = Number(th.low),  high = Number(th.high);
+      if (!Number.isFinite(low))  low  = DEF_LOW;
+      if (!Number.isFinite(high)) high = DEF_HIGH;
+      low  = clamp(Math.round(low),  ABS_MIN, ABS_MAX);
+      high = clamp(Math.round(high), ABS_MIN, ABS_MAX);
+      if (low > high){ const t=low; low=high; high=t; }
+      return { low, high };
+    }
+
+    // 태그별 임계값을 사용한 상태 판정
+    function stateOfTemp(value, tagId){
+      const x = Number(value);
+      if (!Number.isFinite(x)) return '—';
+      if (x < ABS_MIN || x > ABS_MAX) return '이상';
+      const { low, high } = getTempThresholdFor(tagId);
+      if (x < low)  return '낮음';
+      if (x > high) return '높음';
+      return '정상';
+    }
+
+    // 전압→% 변환(선형): 0V=0%, 3.3V=100%  (입력이 mV면 자동 V로 보정)
+    function battVoltageToPercent(v){
+      if (v == null || !Number.isFinite(Number(v))) return null;
+      let vv = Number(v);
+      if (vv > 20) vv = vv / 1000; // mV → V
+      const Vmin = 0, Vmax = 3.3;
+      let pct = (vv - Vmin) / (Vmax - Vmin) * 100;
+      if (!Number.isFinite(pct)) return null;
+      return Math.round(Math.max(0, Math.min(100, pct)));
+    }
+
+    // localStorage
+    function _battReadAll(){ try{ return JSON.parse(localStorage.getItem(BATT_NS)||'{}'); }catch{ return {}; } }
+    function _battWriteAll(obj){ localStorage.setItem(BATT_NS, JSON.stringify(obj)); }
+
+    function getBattThresholdFor(tagId){
+      const key = window.macHex12(tagId);
+      const all = _battReadAll();
+      const th  = (key && all[key]) ? all[key] : { minPct:BATT_DEF_MIN_PCT };
+      let minPct = Number(th.minPct);
+      if (!Number.isFinite(minPct)) minPct = BATT_DEF_MIN_PCT;
+      minPct = Math.min(100, Math.max(0, Math.round(minPct)));
+      return { minPct };
+    }
+
+    function setBattThresholdFor(tagId, minPct){
+      const key = window.macHex12(tagId);
+      if (!key) return;
+      minPct = Math.min(100, Math.max(0, Math.round(Number(minPct)||BATT_DEF_MIN_PCT)));
+      const all = _battReadAll(); all[key] = { minPct }; _battWriteAll(all);
+      window.dispatchEvent(new CustomEvent('sj:batt-threshold-changed', { detail:{ id:key, minPct } }));
+    }
+
+    // 값만 넣으면 쓰기 쉬운 판정(라벨/퍼센트/충전필요)
+    function stateOfBattByPct(vVolt, tagId){
+      const pct = battVoltageToPercent(vVolt);
+      if (pct==null) return { label:'—', pct:null, need:null, minPct:null };
+      const { minPct } = getBattThresholdFor(tagId);
+      const need = pct < minPct;
+      return { label: need ? '충전 필요' : '정상', pct, need, minPct };
+    }
+
+    // 전역 노출
+    window.getBattThresholdFor = getBattThresholdFor;
+    window.setBattThresholdFor = setBattThresholdFor;
+    window.battVoltageToPercent = battVoltageToPercent;
+    window.stateOfBattByPct = stateOfBattByPct;
+
+    // 다른 탭/페이지에서 임계값 변경되면 재렌더
+    window.addEventListener('sj:batt-threshold-changed', ()=>{ if (typeof render==='function') render(); });
+    window.addEventListener('storage', (e)=>{ if (e.key===BATT_NS && typeof render==='function') render(); });
+
+    // 외부에서 재사용 가능
+    window.getTempThresholdFor = getTempThresholdFor;
+    window.stateOfTemp         = stateOfTemp;
+  </script>
+
+
+  <!-- ===== 태그 목록 로직 + 실시간/REST ===== -->
+  <script>
+    // ===== 설정 =====
+    const WS_URL = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const API_BASE = "https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const COLLECTION_PATH = "calculated_locations";
+    const ALLOWED_API = "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed";
+    const ACTIVE_MS = 60 * 1000;
+
+    // ===== 유틸 =====
+    const normId = s => String(s || '').toUpperCase().trim();
+
+    // 1) 내부 키: 12자리 16진, 콜론 없음 (예: "AABBCCDDEEFF")
+    function macKey(raw) {
+      const hex = String(raw||'').toUpperCase().replace(/[^0-9A-F]/g,'');
+      return /^[0-9A-F]{12}$/.test(hex) ? hex : null;
+    }
+    // 2) 표시/전송용: 콜론 포함 (예: "AA:BB:CC:DD:EE:FF")
+    function macDisplay(rawOrKey) {
+      const k = macKey(rawOrKey);
+      return k ? k.match(/.{2}/g).join(':') : String(rawOrKey||'');
+    }
+
+    function macHex12(raw){
+      const hex = String(raw||'').toUpperCase().replace(/[^0-9A-F]/g,'');
+      return /^[0-9A-F]{12}$/.test(hex) ? hex : null;
+    }
+    function macPretty(raw){
+      const h = macHex12(raw);
+      return h ? h.match(/.{2}/g).join(':') : String(raw||'');
+    }
+    const fmtTime = (ms) => ms ? new Intl.DateTimeFormat('ko-KR', {
+      timeZone:'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+    }).format(ms) : '—';
+    const toNum = (v) => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+    function pickTs(x){
+      let t = toNum(x.timestamp ?? x.ts ?? x.timestamp_epoch ?? x.raw_time ?? x.time);
+      if (t==null) return null;
+      return (t < 1e12) ? t*1000 : t;
+    }
+    function currentEmail(){ try { return sessionStorage.getItem('app_user_email') || ''; } catch { return ''; } }
+    async function getIdToken(){
+      return new Promise(resolve=>{
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          const u = pool.getCurrentUser();
+          if (!u) return resolve('');
+          u.getSession((err,s)=>{ if(err||!s||!s.isValid()) return resolve(''); resolve(s.getIdToken().getJwtToken());});
+        }catch{ resolve(''); }
+      });
+    }
+    const IS_ADMIN = (()=>{ try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; } })();
+
+    // ===== 허용 태그 =====
+    let __ALLOWED_TAG_IDS = [];
+
+    window.__ALLOWED_TAG_IDS = __ALLOWED_TAG_IDS;
+    window.__ALLOWED_READY = false;
+
+    let __OWNER_OF = new Map();
+    async function fetchAllowedTagIdsFromServer(){
+      const me = currentEmail();
+      if (!me) return [];
+      const token = await getIdToken();
+      const url = new URL(ALLOWED_API);
+      url.searchParams.set('user_id', me);
+      url.searchParams.set('scope', IS_ADMIN ? 'all' : 'descendants');
+      url.searchParams.set('include_owner', '1');
+
+      try{
+        const res = await fetch(url.toString(), {
+          method: 'GET',
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+          mode: 'cors'
+        });
+        const data = await res.json().catch(()=> ({}));
+        if (!res.ok || !data || !Array.isArray(data.tags)) return [];
+        const ids = [];
+        __OWNER_OF = new Map();
+
+        for (const t of data.tags){
+          const raw = (typeof t==='string') ? t : (t.tag_mac || t.id || t.mac || t.tagMac || '');
+          const k = macKey(raw);
+          if (k) {
+            ids.push(k);                     // ← 콜론 없는 12HEX만 보관
+            if (t && typeof t!=='string' && t.ownerId) __OWNER_OF.set(k, String(t.ownerId));
+          }
+        }
+        return [...new Set(ids)];
+      }catch(e){
+        console.error('[allowed] fetch error:', e);
+        return [];
+      }
+    }
+
+    // ===== DOM =====
+    const $rows = document.getElementById('rows');
+    const $count = document.getElementById('count');
+    const $q = document.getElementById('q');
+    const $sort = document.getElementById('sort');
+    const $pager = document.getElementById('pager');
+
+    // ===== 페이지네이션 =====
+    const PAGE_SIZE = 20;
+    let currentPage = 1;
+
+    function pageButton(label, {active=false, disabled=false, dataset={}} = {}){
+    const cls = [
+      'px-3','py-1','rounded','border',
+      active ? 'bg-blue-600 text-white border-blue-600'
+            : 'bg-white text-gray-700 hover:bg-gray-50',
+      disabled ? 'opacity-50 cursor-not-allowed' : ''
+    ].join(' ');
+    const dataAttrs = Object.entries(dataset)
+      .map(([k,v]) => `data-${k}="${v}"`).join(' ');
+    return `<button type="button" class="${cls}" ${disabled?'disabled':''} ${dataAttrs}>${label}</button>`;
+  }
+
+  function renderPager(totalPages){
+    if (!$pager) return;
+    if (totalPages <= 1){ $pager.innerHTML = ''; return; }
+
+    const items = [];
+    items.push(pageButton('이전', { disabled: currentPage===1, dataset:{goto:'prev'} }));
+
+    const maxShow = 7;
+    const pages = [];
+    if (totalPages <= maxShow){
+      for (let i=1;i<=totalPages;i++) pages.push(i);
+    } else {
+      const add = (n)=>{ if (!pages.includes(n) && n>=1 && n<=totalPages) pages.push(n); };
+      add(1); add(2);
+      add(currentPage-2); add(currentPage-1); add(currentPage); add(currentPage+1); add(currentPage+2);
+      add(totalPages-1); add(totalPages);
+      pages.sort((a,b)=>a-b);
+    }
+
+    let last = 0;
+    pages.forEach(p=>{
+      if (last && p-last>1) items.push(`<span class="px-2 text-gray-400">…</span>`);
+      items.push(pageButton(String(p), { active:p===currentPage, dataset:{page:p} }));
+      last = p;
+    });
+
+    items.push(pageButton('다음', { disabled: currentPage===totalPages, dataset:{goto:'next'} }));
+    $pager.innerHTML = items.join('');
+  }
+
+  $pager?.addEventListener('click', (e)=>{
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const goto = btn.dataset.goto;
+    const page = Number(btn.dataset.page);
+
+    if (goto === 'prev' && currentPage > 1){
+      currentPage--; render();
+    } else if (goto === 'next'){
+      currentPage++; render();
+    } else if (Number.isFinite(page)){
+      currentPage = page; render();
+    }
+  });
+
+    // ===== 데이터 상태 =====
+    // tags: id -> { id, owner, lat, lng, temperature, battery_voltage, error_code, ts }
+    const tags = new Map();
+
+    // ★ 전광판 모듈이 참조할 전역 소스
+    window.devices  = tags;            // Map
+    window.knownIds = __ALLOWED_TAG_IDS; // 배열(값 갱신 시 같이 갱신해줄 것)
+
+    // 태그별 임계값을 반영한 뱃지 스타일
+    function tempStateFor(id, t){
+      if (t == null || !Number.isFinite(Number(t))) {
+        return { label:'—', cls:'bg-gray-50 text-gray-500 border-gray-200' };
+      }
+      const x = Number(t);
+      if (x < ABS_MIN || x > ABS_MAX) {
+        return { label:'이상', cls:'bg-red-50 text-red-700 border-red-200' };
+      }
+      const { low, high } = getTempThresholdFor(id);
+      if (x < low)  return { label:'낮음', cls:'bg-amber-50 text-amber-700 border-amber-200' };
+      if (x > high) return { label:'높음', cls:'bg-amber-50 text-amber-700 border-amber-200' };
+      return { label:'정상', cls:'bg-green-50 text-green-700 border-green-200' };
+    }
+    function battStateFor(id, rawVolt){
+      const st = stateOfBattByPct(rawVolt, id); // {label, pct, need}
+      if (st.pct==null) return { label:'—', cls:'bg-gray-50 text-gray-500 border-gray-200', pct:null };
+      const cls = st.need
+        ? 'bg-amber-50 text-amber-700 border-amber-200'   // 임계% 미만 → 충전 필요
+        : 'bg-green-50 text-green-700 border-green-200';  // 정상
+      return { label: st.label, cls, pct: st.pct };
+    }
+
+    function errorBadge(n){
+      const num = Number(n);
+      if (!Number.isFinite(num)) return { label:'—',  cls:'bg-gray-50 text-gray-500 border-gray-200' };
+      if (num===0) return { label:'정상', cls:'bg-green-50 text-green-700 border-green-200' };
+      if (num===1) return { label:'경고', cls:'bg-amber-50 text-amber-700 border-amber-200' };
+      if (num===2) return { label:'에러', cls:'bg-red-50 text-red-700 border-red-200' };
+      return { label:String(num), cls:'bg-gray-50 text-gray-700 border-gray-200' };
+    }
+
+    function render() {
+      const term = ($q.value || '').trim().toLowerCase();
+      const sort = $sort.value;
+
+      const now = Date.now();
+      let arr = [];
+      for (const key of __ALLOWED_TAG_IDS) {
+        const d = tags.get(key) || { id: key };
+        const owner = d.owner ? String(d.owner).toLowerCase() : '';
+        const searchKey = `${key.toLowerCase()} ${owner}`;
+        if (term && !searchKey.includes(term)) continue;
+        arr.push(d);
+      }
+
+      // 정렬
+      arr.sort((a, b) => {
+        if (sort === 'time_desc') return (b.ts || 0) - (a.ts || 0);
+        if (sort === 'time_asc')  return (a.ts || 0) - (b.ts || 0);
+        if (sort === 'id_asc')    return a.id.localeCompare(b.id);
+        if (sort === 'id_desc')   return b.id.localeCompare(a.id);
+        if (sort === 'temp_desc') return (b.temperature ?? -Infinity) - (a.temperature ?? -Infinity);
+        if (sort === 'batt_desc') return (b.battery_voltage ?? -Infinity) - (a.battery_voltage ?? -Infinity);
+        return 0;
+      });
+
+      // ===== 페이지네이션 계산 =====
+      const total = arr.length;
+      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      if (currentPage > totalPages) currentPage = totalPages;   // 데이터 변화에 따른 보정
+      const start = (currentPage - 1) * PAGE_SIZE;
+      const pageItems = arr.slice(start, start + PAGE_SIZE);
+
+      // 상단 카운터
+      $count.textContent = total
+        ? `${total}개 · ${currentPage}/${totalPages}페이지`
+        : '—';
+
+      // 렌더링 (pageItems만)
+      const rows = [];
+      for (const d of pageItems) {
+        const id = d.id;                   // 내부 ID(12HEX)
+        const labelId = macPretty(id);     // 화면 표시용
+        const owner = d.owner || __OWNER_OF.get(id) || '';
+
+        const t = toNum(d.temperature);
+        let vV = null;
+        if (d.battery_voltage != null) {
+          const raw = Number(d.battery_voltage);
+          vV = (raw > 20) ? (raw / 1000) : raw;
+        }
+        const tempS = tempStateFor(id, t);
+        const battS = battStateFor(id, d.battery_voltage);
+        const errS  = errorBadge(d.error_code);
+
+        const hasLoc = Number.isFinite(d.lat) && Number.isFinite(d.lng);
+        const tsNum = Number.isFinite(d.ts) ? d.ts : NaN;
+        const ts    = fmtTime(d.ts);
+
+        const ageMs = Number.isFinite(tsNum) ? (now - tsNum) : Infinity;
+        const activeCls = (ageMs <= ACTIVE_MS) ? '' : 'opacity-60';
+
+        rows.push(`
+          <tr class="hover:bg-gray-50 ${activeCls}">
+            <td class="px-3 py-2 align-middle"><div class="mono font-medium">${labelId}</div></td>
+            <td class="px-3 py-2 align-middle text-gray-700">${owner || '—'}</td>
+            <td class="px-3 py-2 align-middle">
+              <div class="flex items-center gap-2">
+                <span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${tempS.cls}">${tempS.label}</span>
+                <span>${t != null ? `${t} ℃` : '—'}</span>
+              </div>
+            </td>
+            <td class="px-3 py-2 align-middle">
+              <div class="flex items-center gap-2">
+                <span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${battS.cls}">${battS.label}</span>
+                <span>
+                  ${vV != null ? `${vV.toFixed(2)} V` : '—'}
+                  ${battS.pct!=null ? ` (${battS.pct}%)` : ''}
+                </span>
+              </div>
+            </td>
+            <td class="px-3 py-2 align-middle">
+              <span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${errS.cls}">${errS.label}</span>
+            </td>
+            <td class="px-3 py-2 align-middle text-gray-700">
+              <button
+                ${hasLoc ? '' : 'disabled'}
+                class="px-2 py-1 text-xs rounded-md border bg-white hover:bg-gray-50 inline-flex items-center gap-1 ${hasLoc ? '' : 'opacity-50 cursor-not-allowed'}"
+                data-map-id="${id}"
+                title="지도 열기">
+                <i class="ri-map-pin-line align-middle"></i>
+              </button>
+            </td>
+            <td class="px-3 py-2 align-middle text-gray-700">${ts}</td>
+          </tr>
+        `);
+      }
+
+      $rows.innerHTML = rows.join('');
+
+      // 지도 버튼 이벤트 연결 (현재 페이지 행만)
+      document.querySelectorAll('button[data-map-id]').forEach(btn => {
+        btn.onclick = () => {
+          if (btn.disabled) return;
+          const id = btn.getAttribute('data-map-id');
+          const d = tags.get(id);
+          if (!d || !Number.isFinite(d.lat) || !Number.isFinite(d.lng)) return;
+          const p = new URLSearchParams();
+          p.set('devices', id);
+          p.set('center', `${d.lat},${d.lng}`);
+          p.set('lat', d.lat); p.set('lng', d.lng); p.set('zoom', 16);
+          if (Number.isFinite(d.ts)) p.set('ts', d.ts);
+          window.open(`gps.html?${p.toString()}`, '_blank');
+        };
+      });
+
+      // 페이지네이션 렌더
+      renderPager(totalPages);
+
+      // 전광판 갱신(공통 모듈 경유)
+      window.updateTicker && window.updateTicker();
+    }
+
+
+    // ===== 데이터 적재 =====
+    async function loadLatestForAllowed(){
+      const ids = __ALLOWED_TAG_IDS.slice();
+      const limit = 1;
+      const jobs = ids.map(async (rawId)=>{
+        const id = macHex12(rawId) || normId(rawId);
+        const key = rawId;                           // 내부 키(12HEX)
+        const tagAddrParam = macDisplay(key);        // "AA:BB:.."
+        const url = `${API_BASE}/${COLLECTION_PATH}?tag_address=${encodeURIComponent(tagAddrParam)}&days=1&order=desc&limit=${limit}`;
+        try{
+          const res = await fetch(url, {mode:'cors'});
+          const data = await res.json().catch(()=> []);
+          const rows = Array.isArray(data) ? data : (data.items || []);
+          const it = rows[0];
+          if (!it) { if (!tags.has(key)) tags.set(key, { id: key }); return; }
+          const ts = pickTs(it);
+          const temp = toNum(it.temperature ?? it.temp);
+          const batt = toNum(it.battery_voltage ?? it.battery);
+          const lat  = toNum(it.latitude);
+          const lng  = toNum(it.longitude ?? it.longtitude);
+          const owner = __OWNER_OF.get(id) || it.ownerId || '';
+          tags.set(id, {
+            id, owner,
+            temperature: temp,
+            battery_voltage: batt,
+            lat, lng,
+            error_code: it.error_code ?? null,
+            send_type:  it.send_type  ?? null,
+            ts
+          });
+        }catch(e){
+          console.warn('[latest] fail for', id, e);
+          if (!tags.has(id)) tags.set(id, { id });
+        }
+      });
+
+      await Promise.all(jobs);
+      render();
+    }
+
+    // ===== 실시간 =====
+    let ws, retry=0;
+    function handleMessage(raw){
+      try{
+        const msg = JSON.parse(raw);
+        const idRaw = msg.tag_address || msg.device_id || msg.id;
+        const key = macKey(idRaw);
+        if (!idRaw || !key) return;
+
+        // 권한 확인(관리자 외에는 허용 리스트 외 pass)
+        if (!IS_ADMIN && !__ALLOWED_TAG_IDS.includes(key)) return;
+
+        const temp = toNum(msg.temperature);
+        const batt = (msg.battery_voltage!=null) ? toNum(msg.battery_voltage)
+                    : (msg.battery!=null ? toNum(msg.battery) : null);
+        const lat  = toNum(msg.latitude);
+        const lng  = toNum(msg.longitude);
+        const tsRaw = toNum(msg.timestamp ?? msg.time ?? msg.ts ?? msg.timestamp_epoch) ?? Date.now();
+        const ts = tsRaw < 1e12 ? tsRaw*1000 : tsRaw;
+
+        const prev = tags.get(key) || { id: key };
+        tags.set(key, {
+          ...prev,
+          temperature: (temp ?? prev.temperature),
+          battery_voltage: (batt ?? prev.battery_voltage),
+          lat: (lat ?? prev.lat),
+          lng: (lng ?? prev.lng),
+          error_code: (msg.error_code ?? prev.error_code),
+          send_type:  (msg.send_type  ?? prev.send_type),
+          ts
+        });
+
+        render();
+      }catch(e){
+        console.error('WS parse error:', e, raw);
+      }
+    }
+    function connectWS(){
+      try{
+        ws = new WebSocket(WS_URL);
+        ws.onopen = ()=>{ retry=0; };
+        ws.onmessage = (ev)=> handleMessage(ev.data);
+        ws.onclose = ()=> setTimeout(connectWS, Math.min(1000*(++retry), 10000));
+        ws.onerror = ()=> { try{ ws.close(); }catch{} };
+      }catch(e){
+        console.warn('WS failed', e);
+      }
+    }
+
+    // ===== 시작 =====
+    (async function(){
+      // 공통 헤더 로테이터 준비(자동 장착)
+      (function waitSJUI(){ if (!window.SJUI) return setTimeout(waitSJUI, 20); })();
+
+      // 허용 태그 로딩
+      __ALLOWED_TAG_IDS = await fetchAllowedTagIdsFromServer();
+      window.__ALLOWED_TAG_IDS = __ALLOWED_TAG_IDS;   // 전역 반영
+      window.__ALLOWED_READY = true;                  // 허용목록 준비됨
+      window.knownIds = __ALLOWED_TAG_IDS;            // 전광판 문구 생성용
+      // ★ 허용 필터 재적용(전광판에서 삭제된 태그 제거)
+      window.SJUI?.TickerHub?.refreshFilter?.();
+
+      // 허용 태그가 하나도 없으면 테이블 비움
+      if (__ALLOWED_TAG_IDS.length === 0 && !IS_ADMIN){
+        tags.clear();
+        render();
+        return;
+      }
+
+      // 초기 최신 스냅샷
+      await loadLatestForAllowed();
+
+      // 실시간 연결
+      connectWS();
+
+      // 검색/정렬
+      $q.addEventListener('input',  ()=>{ currentPage = 1; render(); });
+      $sort.addEventListener('change', ()=>{ currentPage = 1; render(); });
+
+      // 주기적 리프레시: 1분
+      setInterval(async ()=>{
+        __ALLOWED_TAG_IDS = await fetchAllowedTagIdsFromServer();
+        window.__ALLOWED_TAG_IDS = __ALLOWED_TAG_IDS; // 전역 반영
+        window.knownIds = __ALLOWED_TAG_IDS;          // 전광판 문구 생성용
+        // ★ 갱신될 때마다 전광판 재필터
+        window.SJUI?.TickerHub?.refreshFilter?.();
+        await loadLatestForAllowed();
+      }, 60*1000);
+    })();
+  </script>
+</body>
+</html>

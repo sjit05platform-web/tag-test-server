@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <!-- ▼▼▼ 보호 페이지 공통: <head> 맨 위에 넣기 ▼▼▼ -->
+  <meta charset="UTF-8" />
+  <style> html.auth-check { visibility: hidden } </style>
+  <style>
+  /* ...전광판 페이드인 */
+  #hdr-rotator{ position:relative; min-height:24px; }
+  #hdr-rotator .rot-line{
+    position:absolute; inset:0;
+    opacity:0; transform:translateY(8px);
+    transition:opacity .4s ease, transform .4s ease;
+    will-change:opacity,transform;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #hdr-rotator .rot-line.show{
+    opacity:1; transform:translateY(0);
+  }
+</style>
+
+  <script>
+    // UI 깜빡임 방지
+    document.documentElement.classList.add('auth-check');
+
+    // 로그인 페이지 경로
+    window.__LOGIN_PAGE__ = 'login.html';
+
+    // Cognito User Pool 설정
+    window.__POOL__ = {
+      UserPoolId: 'ap-northeast-2_jubP19tft', // ← 실제 값
+      ClientId:   '2mpr21p7900br0n3p03g8f9ota', // ← 실제 값
+    };
+  </script>
+
+  <!-- Cognito SDK (순서 중요) -->
+  <script src="aws-cognito-sdk.min.js"></script>
+  <script src="amazon-cognito-identity.min.js"></script>
+
+  <!-- 인증 가드 -->
+  <script>
+    (function authGuard() {
+      function goLogin() {
+        const u = new URL(window.__LOGIN_PAGE__, location.href);
+        u.searchParams.set('redirect', location.href);
+        location.replace(u.toString());
+      }
+
+      (function waitLib(){
+        if (!window.AmazonCognitoIdentity){ return setTimeout(waitLib, 20); }
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+
+          // 🔸 브라우저 세션 플래그 없으면 강제 재로그인
+          if (!sessionStorage.getItem('app_session')) {
+            const u = pool.getCurrentUser();
+            if (u) { try { u.signOut(); } catch(e){} }
+            return goLogin();
+          }
+
+          const user = pool.getCurrentUser();
+          if (!user) return goLogin();
+
+          user.getSession(function(err, session){
+            if (err || !session || !session.isValid()) return goLogin();
+
+            try {
+              const groups = (session.getIdToken().payload || {})['cognito:groups'] || [];
+              sessionStorage.setItem('app_is_admin', groups.includes('admin') ? '1' : '0');
+            } catch {}
+
+            // 페이지 표시
+            document.documentElement.classList.remove('auth-check');
+
+            // 이메일(없으면 username) 저장 + 사이드바 인사말 표시
+            user.getUserAttributes(function(e, attrs){
+              let email = (typeof user.getUsername === 'function') ? user.getUsername() : '';
+              if (!e && Array.isArray(attrs)) {
+                const em = attrs.find(a => (a.getName && a.getName() === 'email') || a?.Name === 'email');
+                if (em) email = (em.getValue ? em.getValue() : em.Value);
+              }
+              try { sessionStorage.setItem('app_user_email', email); } catch {}
+              try { window.__showSidebarGreet && window.__showSidebarGreet(email); } catch {}
+            });
+          });
+        }catch(e){ goLogin(); }
+      })();
+    })();
+  </script>
+  <!-- ▲▲▲ 여기까지가 '무조건 로그인 먼저' 가드 ▲▲▲ -->
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tag Monitor</title>
+
+  <!-- 아이콘/폰트 -->
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { primary:'#1E88E5', secondary:'#F5F6FA' },
+          borderRadius: {
+            'none':'0px','sm':'4px', DEFAULT:'8px','md':'12px','lg':'16px',
+            'xl':'20px','2xl':'24px','3xl':'32px','full':'9999px','button':'8px'
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- ★ 공통 UI CSS -->
+  <link rel="stylesheet" href="./ui-common.css" />
+
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc}
+    .mono{font-family:'Roboto Mono',monospace}
+  </style>
+</head>
+<body>
+  <!-- ★ 공통 레이아웃(sj-shell) -->
+  <div class="sj-shell">
+    <!-- 사이드바: ui-common.js가 자동 렌더 -->
+    <aside class="sj-sidebar" data-sj-sidebar></aside>
+
+    <!-- 메인 -->
+    <main class="sj-main">
+      <!-- 공통 헤더 -->
+      <header class="sj-header">
+        <div class="sj-title text-sm">
+          <span id="alarm-count" class="ml-2 text-xs text-gray-400"></span>
+        </div>
+        <!-- 전광판(공통 로테이터) -->
+        <div data-sj-rotator id="hdr-rotator" class="w-[240px] sm:w-[320px] md:w-[480px]"></div>
+      </header>
+
+      <!-- 페이지 콘텐츠 -->
+      <section class="p-6">
+        <div class="mb-4 md:mb-6">
+          <h1 class="text-xl font-bold text-gray-800">알람 모니터링</h1>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+          <div class="p-3 flex items-center justify-between gap-2 text-sm">
+            <div class="flex items-center gap-2">
+              <button id="btnSelectAll" class="px-2 py-1 border rounded bg-white hover:bg-gray-50">모두 선택</button>
+              <button id="btnClearSel" class="px-2 py-1 border rounded bg-white hover:bg-gray-50">선택 해제</button>
+              <span class="text-gray-300 mx-1 hidden sm:inline">|</span>
+              <button id="btnAck" class="px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-50" disabled>확인(삭제)</button>
+            </div>
+            <div class="flex items-center gap-2">
+              <input id="search" type="text" placeholder="ID/유형/상태 검색…" class="w-56 pl-3 pr-3 py-1.5 text-sm border rounded-md bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300">
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead class="bg-gray-50 border-y border-gray-200">
+                <tr class="text-gray-600">
+                  <th class="px-3 py-2 text-left"><input type="checkbox" id="chkAll" /></th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">ID</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">유형</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">상태</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">전송 타입</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">발생 시간</th>
+                </tr>
+              </thead>
+              <tbody id="alarm-tbody" class="divide-y divide-gray-100"></tbody>
+            </table>
+
+            <!-- 페이지네이션 -->
+            <div id="pager" class="p-3 flex items-center justify-center gap-1 text-sm select-none"></div>
+          </div>
+
+          <div id="empty-state" class="p-6 text-center text-gray-500 hidden">
+            현재 미확인 알람이 없습니다.
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ★ 공통 UI JS (autoInit로 사이드바/로테이터 자동 바인딩) -->
+  <script type="module" src="./ui-common.js"></script>
+
+  <!-- ✅ 전광판 공통 모듈 브릿지 (ticker-common.js 사용) -->
+  <script type="module">
+    import {
+      publishAlerts,
+      subscribeTickerFromOthers,
+      macPretty
+    } from './ticker-common.js';
+
+    // 다른 탭/페이지의 브로드캐스트도 받기 (1회)
+    subscribeTickerFromOthers();
+
+    // 비모듈 영역에서 호출할 수 있게 window에 핸들러 제공
+    // alerts: [{ id, kind:'device'|'gateway', level:'error'|'warn', ts }]
+    window.__publishTicker = (alerts = []) => {
+      const messages = alerts.map(a => {
+        const who = (a.kind === 'device') ? macPretty(a.id) : String(a.id);
+        const text =
+          a.kind === 'device'
+            ? (a.level === 'error'
+                ? `${who} 디바이스가 에러 상태입니다.`
+                : `${who} 디바이스가 경고 상태입니다.`)
+            : (a.level === 'error'
+                ? `${who} 게이트웨이가 에러 상태입니다.`
+                : `${who} 게이트웨이가 경고 상태입니다.`);
+        return { text, level: a.level, meta: { id: a.id, kind: a.kind } };
+      });
+
+      publishAlerts(messages, { mode: 'replace', staggerMs: 1200, broadcast: true });
+    };
+  </script>
+
+  <!-- ★ 사이드바 항목 구성 -->
+  <script>
+    window.__SJ_SIDEBAR__ = {
+      logo: { text: 'Tag Monitor', href: 'design.html', iconSrc: '', version: 'v0.1' },
+      search: false,
+      sections: [
+        { title: 'Main', items: [
+          { icon: 'ri-time-line',         label: '실시간 대시보드', href: 'design.html',  activeMatch: 'design.html' },
+          { icon: 'ri-device-line',       label: '디바이스 상세',   href: 'detail.html',  activeMatch: 'detail.html' },
+          { icon: 'ri-price-tag-3-line',  label: '태그',            href: 'tag.html',     activeMatch: 'tag.html' },
+          { icon: 'ri-rfid-line',         label: '게이트웨이',      href: 'gateway.html', activeMatch: 'gateway.html' },
+          { icon: 'ri-alarm-warning-line',label: '알람',            href: 'alarm.html',   activeMatch: 'alarm.html' },
+          { icon: 'ri-settings-3-line',   label: '설정',            href: 'setting.html', activeMatch: 'setting.html' }
+        ] }
+      ],
+      initiallyOpen: false
+    };
+  </script>
+
+  <!-- ★ 인사말 슬롯 주입(공통 사이드바 렌더 후) -->
+  <script>
+    (function mountGreetSlot(){
+      function inject(){
+        const root = document.querySelector('[data-sj-sidebar]');
+        if (!root || document.getElementById('sidebar-greet')) return;
+        const logo = root.querySelector('.sj-sidebar__logo');
+        const box  = document.createElement('div');
+        box.id = 'sidebar-greet';
+        box.className = 'px-4 py-1 text-[12px] text-gray-700 hidden';
+        box.innerHTML = '<span id="sidebar-greet-name"></span>님 안녕하세요!';
+        if (logo && logo.parentNode) {
+          logo.parentNode.insertBefore(box, logo.nextSibling);
+        } else {
+          root.appendChild(box);
+        }
+      }
+      const run = () => setTimeout(inject, 0);
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', run, { once: true });
+      } else { run(); }
+      window.__showSidebarGreet = function(email){
+        try{
+          email = email || sessionStorage.getItem('app_user_email') || '';
+          const box  = document.getElementById('sidebar-greet');
+          const name = document.getElementById('sidebar-greet-name');
+          if (box && name && email){ name.textContent = email; box.classList.remove('hidden'); }
+        }catch{}
+      };
+      setTimeout(()=> window.__showSidebarGreet && window.__showSidebarGreet(), 400);
+    })();
+  </script>
+
+  <!-- ===== 기능 스크립트 ===== -->
+  <!-- 캐시 무효화를 위해 쿼리스트링 버전 권장 -->
+  <script src="alarm-capture.js?v=2025-08-20-1"></script>
+  <script>
+  (async () => {
+    // ===== DOM =====
+    const $tbody     = document.getElementById('alarm-tbody');
+    const $empty     = document.getElementById('empty-state');
+    const $count     = document.getElementById('alarm-count');
+    const $chkAll    = document.getElementById('chkAll');
+    const $btnAll    = document.getElementById('btnSelectAll');
+    const $btnClr    = document.getElementById('btnClearSel');
+    const $btnAck    = document.getElementById('btnAck');
+    const $search    = document.getElementById('search');
+    const $pager     = document.getElementById('pager');
+
+    // ===== 상태 =====
+    const alarms   = new Map(); // key -> {key,id,kind,status,ts,send_type}
+    const selected = new Set();
+    let searchTerm = '';
+
+    // 페이지네이션
+    const PAGE_SIZE = 20;
+    let currentPage = 1;
+
+    // ==========================================================
+    // 전광판(공통 Rotator 사용) — 실시간 WS 기준
+    // ==========================================================
+
+    (function waitSJUI(){
+      if (!window.SJUI) return setTimeout(waitSJUI, 20);
+      // 공통 스크립트가 [data-sj-rotator] 찾아 자동 장착
+      window.SJUI.mountRotators?.();
+      // 초기 상태 즉시 반영
+      updateTicker();
+    })();
+
+    const WS_URL    = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const ACTIVE_MS = 60 * 1000; // 최근 60초 내 warn/error만 전광판 후보
+
+    const liveStates = new Map(); // key = `${kind}:${id}` -> { id, kind, code, ts }
+    const ALLOWED_API = "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed";
+
+    function currentEmail(){ try { return sessionStorage.getItem('app_user_email') || ''; } catch { return ''; } }
+    const isAdmin = () => { try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; } };
+    const normId  = s => String(s || '').toUpperCase().trim();
+    const macKey  = s => String(s || '').toUpperCase().replace(/[^0-9A-F]/g,'');
+
+    const __ALLOWED = { ids:new Set(), keys:new Set(), ready:false };
+    window.__ALLOWED_TAG_IDS = [];
+    window.__ALLOWED_READY   = false;
+
+    async function getIdToken(){
+      return new Promise(resolve=>{
+        try{
+          const pool = new AmazonCognitoIdentity.CognitoUserPool(window.__POOL__);
+          const u = pool.getCurrentUser();
+          if (!u) return resolve('');
+          u.getSession((err,s)=>{ if(err||!s||!s.isValid()) return resolve(''); resolve(s.getIdToken().getJwtToken()); });
+        }catch{ resolve(''); }
+      });
+    }
+
+    async function fetchAllowedTags(){
+      __ALLOWED.ids.clear(); __ALLOWED.keys.clear(); __ALLOWED.ready = false;
+      const me = currentEmail();
+      if (!me){ __ALLOWED.ready = true; return; }
+
+      const token = await getIdToken();
+      const url = new URL(ALLOWED_API);
+      url.searchParams.set('user_id', me);
+      url.searchParams.set('scope', isAdmin() ? 'all' : 'descendants');
+      url.searchParams.set('include_owner', '1');
+
+      try{
+        const res = await fetch(url.toString(), {
+          method:'GET',
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+          mode:'cors'
+        });
+        const data = await res.json().catch(()=> ({}));
+        if (res.ok && data && data.ok){
+          const raw = Array.isArray(data.tags) ? data.tags : [];
+          for (const t of raw){
+            const rawId = (typeof t === 'string') ? t : (t?.tag_mac || t?.id || t?.mac || t?.tagMac);
+            const idStr = normId(rawId);
+            const key   = macKey(rawId);
+            if (idStr) __ALLOWED.ids.add(idStr);
+            if (key)   __ALLOWED.keys.add(key);
+          }
+        } else {
+          console.warn('[allowed] non-ok:', res.status, data);
+        }
+      }catch(e){ console.error('[allowed] fetch error:', e); }
+      finally{
+        __ALLOWED.ready = true;
+        // ▼ 전역 반영 + 전광판 필터 재적용
+        window.__ALLOWED_TAG_IDS = [...__ALLOWED.keys];  // 12HEX 대문자 배열
+        window.__ALLOWED_READY   = true;
+        window.SJUI?.TickerHub?.refreshFilter?.();
+      }
+    }
+
+    function isAllowedDeviceId(id){
+      if (!__ALLOWED.ready) return false;
+      const n = normId(id);
+      const k = macKey(id);
+      return __ALLOWED.ids.has(n) || __ALLOWED.keys.has(k);
+    }
+
+    function shouldShowAlarm(a){
+      if (a.kind === 'gateway') return isAdmin();
+      return isAllowedDeviceId(a.id);
+    }
+
+    function normWarnErrByNumberLike(v){
+      const n = Number(v);
+      if (Number.isFinite(n)) { if (n>=2) return 2; if (n>=1) return 1; return 0; }
+      return null;
+    }
+    function normByString(v){
+      const s = String(v ?? '').trim().toLowerCase();
+      if (!s) return null;
+      if (["2","2.0","error","err","에러","down","offline"].includes(s))  return 2;
+      if (["1","1.0","warn","warning","경고"].includes(s))                return 1;
+      if (["0","0.0","ok","정상","up","online"].includes(s))              return 0;
+      return null;
+    }
+    const normTagStatusCode = (code) => normByString(code) ?? normWarnErrByNumberLike(code);
+    const normGwStatusCode  = (v)    => normByString(v)    ?? normWarnErrByNumberLike(v);
+
+    // ✅ 공통 모듈로 보내는 전광판 갱신
+    function updateTicker(){
+      const now = Date.now();
+      const alerts = [];
+
+      for (const v of liveStates.values()){
+        // 최근 ACTIVE_MS 내 데이터만 후보
+        if (now - v.ts > ACTIVE_MS) continue;
+
+        const level = (v.code === 2) ? 'error'
+                    : (v.code === 1) ? 'warn'
+                    : null;
+        if (!level) continue;
+
+        // 게이트웨이는 관리자만 노출
+        if (v.kind === 'gateway' && !isAdmin()) continue;
+
+        alerts.push({ id: v.id, kind: v.kind, level, ts: v.ts });
+      }
+
+      // 공통 ticker-common 브릿지로 전달
+      window.__publishTicker && window.__publishTicker(alerts);
+    }
+
+    function handleLiveMessage(raw){
+      try{
+        const msg = JSON.parse(raw);
+        const now = Date.now();
+
+        // 태그(디바이스)
+        const tagIdRaw = msg.tag_address || msg.device_id || msg.id;
+        if (tagIdRaw != null) {
+          const tagId = normId(tagIdRaw);
+          if (__ALLOWED.ready && isAllowedDeviceId(tagId)) {
+            const code = normTagStatusCode(msg.error_code);
+            if (code != null) {
+              liveStates.set(`device:${tagId}`, { id:tagId, kind:'device', code, ts: now });
+            }
+          }
+        }
+
+        // 게이트웨이 (관리자만 전광판에 반영)
+        const gwIdRaw = msg.gw_address;
+        if (gwIdRaw && isAdmin()){
+          const code = normGwStatusCode(msg.gw_statue);
+          if (code != null) {
+            liveStates.set(`gateway:${String(gwIdRaw)}`, { id:String(gwIdRaw), kind:'gateway', code, ts: now });
+          }
+        }
+
+        updateTicker();
+      }catch(e){ /* ignore parse error */ }
+    }
+
+    function connectLiveWS(){
+      try{
+        const ws = new WebSocket(WS_URL);
+        ws.onopen    = () => {/* ok */};
+        ws.onmessage = (ev) => handleLiveMessage(ev.data);
+        ws.onclose   = () => setTimeout(connectLiveWS, 3000);
+        ws.onerror   = () => ws && ws.close();
+      }catch(e){ setTimeout(connectLiveWS, 3000); }
+    }
+
+    // ===== AlarmStore 동기화 (테이블/페이지네이션 용) =====
+    function syncFromStore(){
+      alarms.clear();
+      for (const a of window.AlarmStore.getAll()){
+        if (shouldShowAlarm(a)) alarms.set(a.key, a);
+      }
+    }
+
+    // ===== 페이지네이션 UI =====
+    function pageButton(label, {active=false, disabled=false, dataset={}}={}){
+      const cls = [
+        'px-3','py-1','rounded','border',
+        active ? 'bg-blue-600 text-white border-blue-600'
+               : 'bg-white text-gray-700 hover:bg-gray-50',
+        disabled ? 'opacity-50 cursor-not-allowed' : ''
+      ].join(' ');
+      const dataAttrs = Object.entries(dataset).map(([k,v])=>`data-${k}="${v}"`).join(' ');
+      return `<button type="button" class="${cls}" ${disabled?'disabled':''} ${dataAttrs}>${label}</button>`;
+    }
+
+    function renderPager(totalPages){
+      if (totalPages <= 1){ $pager.innerHTML = ''; return; }
+      const items = [];
+      items.push(pageButton('이전', {disabled: currentPage===1, dataset:{goto:'prev'}}));
+
+      const maxShow = 7;
+      const pages = [];
+      if (totalPages <= maxShow){
+        for (let i=1;i<=totalPages;i++) pages.push(i);
+      } else {
+        const add = (n)=>{ if (!pages.includes(n) && n>=1 && n<=totalPages) pages.push(n); };
+        add(1); add(2);
+        add(currentPage-2); add(currentPage-1); add(currentPage); add(currentPage+1); add(currentPage+2);
+        add(totalPages-1); add(totalPages);
+        pages.sort((a,b)=>a-b);
+      }
+
+      let last = 0;
+      pages.forEach(p=>{
+        if (last && p-last>1) items.push(`<span class="px-2 text-gray-400">…</span>`);
+        items.push(pageButton(String(p), {active: p===currentPage, dataset:{page:p}}));
+        last = p;
+      });
+
+      items.push(pageButton('다음', {disabled: currentPage===totalPages, dataset:{goto:'next'}}));
+      $pager.innerHTML = items.join('');
+    }
+
+    $pager.addEventListener('click', (e)=>{
+      const btn = e.target.closest('button');
+      if (!btn) return;
+
+      const goto = btn.dataset.goto;
+      const page = Number(btn.dataset.page);
+
+      if (goto === 'prev' && currentPage > 1){
+        currentPage--; render();
+      } else if (goto === 'next'){
+        currentPage++; render();
+      } else if (Number.isFinite(page)){
+        currentPage = page; render();
+      }
+    });
+
+    // ===== 렌더(테이블) =====
+    function fmtSendType(v){ return (v==null || v==='') ? '—' : String(v); }
+    function fmtKST(ms){
+      return new Intl.DateTimeFormat('ko-KR',{
+        timeZone:'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+      }).format(ms);
+    }
+    const badge = (label, cls) =>
+      `<span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${cls}">${label}</span>`;
+    const kindBadge = (k)=> k==='gateway'
+      ? badge('게이트웨이','bg-purple-100 text-purple-700 border-purple-200')
+      : badge('디바이스','bg-blue-100 text-blue-700 border-blue-200');
+    const statusBadge = (s)=> s==='에러'
+      ? badge('에러','bg-red-100 text-red-700 border-red-200')
+      : s==='경고'
+      ? badge('경고','bg-amber-100 text-amber-700 border-amber-200')
+      : badge(String(s||'—'),'bg-gray-100 text-gray-700 border-gray-200');
+
+    function render(){
+      // 1) 데이터 가져와서 검색 필터
+      let list = [...alarms.values()];
+      if (searchTerm){
+        const q = searchTerm.toLowerCase();
+        list = list.filter(a =>
+          a.id.toLowerCase().includes(q) ||
+          a.kind.toLowerCase().includes(q) ||
+          a.status.toLowerCase().includes(q) ||
+          (a.send_type != null && String(a.send_type).toLowerCase().includes(q))
+        );
+      }
+
+      // 2) 최신순
+      list.sort((a,b)=> b.ts - a.ts);
+
+      // 3) 페이지네이션
+      const total = list.length;
+      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      if (currentPage > totalPages) currentPage = totalPages;
+      const start = (currentPage - 1) * PAGE_SIZE;
+      const pageItems = list.slice(start, start + PAGE_SIZE);
+
+      // 4) 표 렌더
+      $tbody.innerHTML = pageItems.map(a=>`
+        <tr class="hover:bg-gray-50">
+          <td class="px-3 py-2">
+            <input type="checkbox" class="rowchk" data-key="${a.key}" ${selected.has(a.key)?'checked':''}>
+          </td>
+          <td class="px-3 py-2"><span class="mono font-medium">${a.id}</span></td>
+          <td class="px-3 py-2">${kindBadge(a.kind)}</td>
+          <td class="px-3 py-2">${statusBadge(a.status)}</td>
+          <td class="px-3 py-2">${fmtSendType(a.send_type)}</td>
+          <td class="px-3 py-2">${fmtKST(a.ts)}</td>
+        </tr>
+      `).join('');
+
+      // 5) 카운트 / 빈 상태
+      $count.textContent = total ? `알림 ${total}건 · ${currentPage}/${totalPages}페이지` : '';
+      $empty.classList.toggle('hidden', total>0);
+
+      // 6) 체크박스 바인딩
+      $tbody.querySelectorAll('.rowchk').forEach(chk=>{
+        chk.addEventListener('change', (e)=>{
+          const k = e.target.dataset.key;
+          if (e.target.checked) selected.add(k); else selected.delete(k);
+          $btnAck.disabled = selected.size === 0;
+          const allRows = $tbody.querySelectorAll('.rowchk');
+          $chkAll.checked = allRows.length>0 && [...allRows].every(c=>c.checked);
+        });
+      });
+      $btnAck.disabled = selected.size === 0;
+
+      // 7) 페이지네이션 렌더
+      renderPager(totalPages);
+
+      // 8) 전광판 갱신
+      updateTicker();
+    }
+
+    // ===== 이벤트 =====
+    $chkAll.addEventListener('change', ()=>{
+      const check = $chkAll.checked;
+      $tbody.querySelectorAll('.rowchk').forEach(chk=>{
+        chk.checked = check;
+        const k = chk.dataset.key;
+        if (check) selected.add(k); else selected.delete(k);
+      });
+      $btnAck.disabled = selected.size === 0;
+    });
+    $btnAll.addEventListener('click', ()=>{
+      $tbody.querySelectorAll('.rowchk').forEach(chk=>{
+        chk.checked = true; selected.add(chk.dataset.key);
+      });
+      $chkAll.checked = true; $btnAck.disabled = selected.size === 0;
+    });
+    $btnClr.addEventListener('click', ()=>{
+      $tbody.querySelectorAll('.rowchk').forEach(chk=> chk.checked = false);
+      selected.clear(); $chkAll.checked = false; $btnAck.disabled = true;
+    });
+    $btnAck.addEventListener('click', ()=>{
+      window.AlarmStore.ack([...selected]);
+      selected.clear(); syncFromStore(); render();
+    });
+    $search.addEventListener('input', ()=>{
+      searchTerm = $search.value.trim();
+      currentPage = 1; render();
+    });
+
+    // ===== 시작 =====
+    await fetchAllowedTags();
+    // 1분마다 허용목록 재조회 → 전역 반영 → 전광판 필터 재적용
+    setInterval(async () => {
+      await fetchAllowedTags();
+      window.__ALLOWED_TAG_IDS = [...__ALLOWED.keys];
+      window.__ALLOWED_READY   = true;
+      window.SJUI?.TickerHub?.refreshFilter?.();
+      updateTicker(); // 화면에 즉시 반영
+    }, 60_000);
+
+    function onStoreChange(){
+      const wasPage1 = (currentPage === 1);
+      syncFromStore();
+      if (wasPage1) currentPage = 1;
+      render();
+    }
+
+    syncFromStore();
+    render();
+
+    // 탭/창 간 동기화
+    window.AlarmStore.subscribe(onStoreChange);
+    window.addEventListener('AlarmStore:update', onStoreChange);
+
+    // (옵션) 폴링(2초)
+    const POLL_MS = 2000;
+    setInterval(onStoreChange, POLL_MS);
+
+    // 실시간 전광판(WS)
+    connectLiveWS();
+  })();
+  </script>
+</body>
+</html>

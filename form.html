@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>게이트웨이 · 모니터링</title>
+
+  <!-- Favicon / Fonts / Icons / Tailwind -->
+  <link rel="shortcut icon" href="https://example-s3-3.s3.ap-northeast-2.amazonaws.com/images.PNG" type="image/x-icon" sizes="16x16">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/remixicon/4.6.0/remixicon.min.css">
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { primary:'#1E88E5', secondary:'#F5F6FA' },
+          borderRadius: {
+            'none':'0px','sm':'4px', DEFAULT:'8px','md':'12px','lg':'16px',
+            'xl':'20px','2xl':'24px','3xl':'32px','full':'9999px','button':'8px'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f8fafc}
+    .mono{font-family:'Roboto Mono',monospace}
+    .sidebar-item.active{background:rgba(30,136,229,.1);border-left:3px solid #1E88E5}
+    .sidebar-item:hover:not(.active){background:rgba(30,136,229,.05)}
+
+    /* ▼ 전광판(로테이터) */
+    #alert-ticker { transition: opacity .25s; }
+    .ticker-viewport { position: relative; overflow: hidden; white-space: nowrap; }
+    .ticker-msg { display:inline-block; opacity:0; transition: opacity .25s; will-change:opacity; }
+    .ticker-msg.show { opacity:1; }
+  </style>
+</head>
+<body class="h-screen flex overflow-hidden">
+
+  <!-- ▼ 왼쪽 사이드바 (그대로 유지) -->
+  <aside class="w-64 bg-white border-r border-gray-200 flex flex-col">
+    <div class="p-4 border-b">
+      <div class="text-xl font-bold text-primary">BLE Monitor</div>
+      <div class="text-xs text-gray-500">SJIT · Dashboard</div>
+    </div>
+    <nav class="p-2 space-y-1">
+      <a href="design.html"  class="sidebar-item flex items-center gap-2 px-3 py-2 rounded-md text-gray-700">
+        <i class="ri-time-line text-lg"></i><span>실시간 대시보드</span>
+      </a>
+      <a href="detail.html"  class="sidebar-item flex items-center gap-2 px-3 py-2 rounded-md text-gray-700">
+        <i class="ri-device-line text-lg"></i><span>디바이스 상세</span>
+      </a>
+      <a href="tag.html"     class="sidebar-item flex items-center gap-2 px-3 py-2 rounded-md text-gray-700">
+        <i class="ri-price-tag-3-line text-lg"></i><span>태그</span>
+      </a>
+      <a href="gateway.html" class="sidebar-item flex items-center gap-2 px-3 py-2 rounded-md text-gray-700">
+        <i class="ri-rfid-line text-lg"></i><span>게이트웨이</span>
+      </a>
+    </nav>
+    <div class="mt-auto p-3 text-[11px] text-gray-400">© 2025 SJIT</div>
+  </aside>
+
+  <!-- ▼ 오른쪽 메인 -->
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <header class="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4">
+      <div class="text-sm text-gray-500">탭: <span class="font-medium text-gray-700">게이트웨이</span></div>
+
+      <!-- ▼ 전광판(로테이터) -->
+      <div id="alert-ticker" class="hidden items-center gap-2 px-3 py-1 rounded-full border text-sm border-red-200 bg-red-50 text-red-700">
+        <i class="ri-alert-fill text-base"></i>
+        <div class="ticker-viewport w-[240px] sm:w-[320px] md:w-[480px]">
+          <span id="ticker-msg" class="ticker-msg"></span>
+        </div>
+      </div>
+    </header>
+
+    <main class="flex-1 overflow-y-auto p-6 bg-gray-50">
+      <!-- 여기에 원하는 컨텐츠를 추가하면 됩니다 (현재 비워둠) -->
+    </main>
+  </div>
+
+  <!-- ▼ 스크립트: 사이드바 active & 전광판 데이터 구동 -->
+  <script>
+    // 사이드바 active 표시
+    (function(){
+      const path = location.pathname.split('/').pop() || 'gateway.html';
+      document.querySelectorAll('.sidebar-item').forEach(a=>{
+        const href = a.getAttribute('href') || '';
+        a.classList.toggle('active', href.endsWith(path));
+      });
+    })();
+
+    // ===== 설정 =====
+    const WS_URL = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const API_BASE = "https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev";
+    const COLLECTION_PATH = "calculated_locations";
+    const BACKFILL_LIMIT_PER_ID = 1;
+
+    // ===== 유틸 =====
+    const toNum = (v) => (v==null ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+    function pickTs(x){
+      let t = toNum(x.timestamp ?? x.ts ?? x.timestamp_epoch ?? x.raw_time ?? x.time);
+      if (t==null) return null;
+      return (t < 1e12) ? t*1000 : t;
+    }
+
+    // ===== DOM / 상태 =====
+    const $ticker = document.getElementById('alert-ticker');
+    const $tickerMsg = document.getElementById('ticker-msg');
+
+    const devices = new Map(); // id -> {error_code, ...}
+    let knownIds = [];
+    let ws, retry=0;
+
+    // ===== 전광판 로테이터 =====
+    const ROTATE_MS = 2500;
+    let rotMsgs = [];
+    let rotIdx = 0;
+    let rotTimer = null;
+    function _showNow(text){
+      $tickerMsg.classList.remove('show');
+      setTimeout(()=>{ $tickerMsg.textContent = text; $tickerMsg.classList.add('show'); }, 60);
+    }
+    function _nextTick(){
+      if (!rotMsgs.length){ _stopRot(); return; }
+      rotIdx = (rotIdx + 1) % rotMsgs.length;
+      _showNow(rotMsgs[rotIdx]);
+    }
+    function _startRot(){
+      if (rotTimer) return;
+      if (!rotMsgs.length) return;
+      _showNow(rotMsgs[rotIdx]);
+      rotTimer = setInterval(_nextTick, ROTATE_MS);
+      $ticker.classList.remove('hidden');
+    }
+    function _stopRot(){
+      if (rotTimer){ clearInterval(rotTimer); rotTimer=null; }
+      $ticker.classList.add('hidden');
+      $tickerMsg.textContent = '';
+      $tickerMsg.classList.remove('show');
+    }
+    function updateTicker(){
+      const msgs = [];
+      for (const id of knownIds){
+        const code = Number(devices.get(id)?.error_code);
+        if (Number.isFinite(code) && code === 2) msgs.push(`${id} 디바이스가 에러 상태입니다.`);
+        else if (Number.isFinite(code) && code === 1) msgs.push(`${id} 디바이스가 경고 상태입니다.`);
+      }
+      const uniq = [...new Set(msgs)];
+      if (!uniq.length){ rotMsgs=[]; rotIdx=0; _stopRot(); return; }
+      const cur = $tickerMsg.textContent || '';
+      rotMsgs = uniq;
+      const keep = rotMsgs.indexOf(cur);
+      rotIdx = keep>=0 ? keep : 0;
+      _startRot();
+    }
+
+    // ===== 데이터 로드 (목록 + 최신 데이터 백필) =====
+    async function loadDeviceList(){
+      const url = `${API_BASE}/${COLLECTION_PATH}`;
+      try{
+        const res = await fetch(url, {mode:'cors'});
+        const txt = await res.text();
+        if (!res.ok){ knownIds=[]; updateTicker(); return; }
+        let data; try{ data = JSON.parse(txt); }catch{ knownIds=[]; updateTicker(); return; }
+        const list = Array.isArray(data?.devices) ? data.devices : (Array.isArray(data) ? data : []);
+        const set = new Set(knownIds);
+        for (const id of list) set.add(String(id));
+        knownIds = [...set].sort();
+        for (const id of knownIds){ if (!devices.has(id)) devices.set(id, {}); }
+      }catch(e){
+        knownIds=[]; 
+      } finally {
+        updateTicker();
+      }
+    }
+
+    async function backfillLatestFor(id){
+      const url = `${API_BASE}/${COLLECTION_PATH}?tag_address=${encodeURIComponent(id)}&days=1&order=desc&limit=${BACKFILL_LIMIT_PER_ID}`;
+      try{
+        const res = await fetch(url, {mode:'cors'});
+        const txt = await res.text();
+        if (!res.ok) return;
+        let data; try{ data = JSON.parse(txt); }catch{ return; }
+        const rows = Array.isArray(data) ? data : (data.items||[]);
+        if (!rows.length) return;
+        const r = rows[0];
+        const ts = pickTs(r) ?? Date.now();
+        const obj = devices.get(id) || {};
+        devices.set(id, {
+          ...obj,
+          error_code: r.error_code ?? obj.error_code,
+          ts
+        });
+      }catch(e){/* noop */}
+    }
+
+    async function backfillAllLatest(concurrency=4){
+      const ids = knownIds.slice();
+      let idx = 0;
+      async function worker(){
+        while (idx < ids.length){
+          const cur = ids[idx++];
+          await backfillLatestFor(cur);
+        }
+      }
+      const jobs = Array.from({length: Math.min(concurrency, ids.length)}, worker);
+      await Promise.all(jobs);
+      updateTicker();
+    }
+
+    // ===== WebSocket =====
+    function handleMessage(raw){
+      try{
+        const msg = JSON.parse(raw);
+        const id = msg.tag_address || msg.device_id || msg.id;
+        if (!id) return;
+
+        if (!knownIds.includes(id)){
+          knownIds.push(id);
+          knownIds.sort();
+        }
+
+        const next = devices.get(id) || {};
+        devices.set(id, {
+          ...next,
+          error_code: (msg.error_code ?? next.error_code),
+          ts: (toNum(msg.timestamp ?? msg.time ?? msg.ts ?? msg.timestamp_epoch) ?? Date.now()) * ((toNum(msg.timestamp ?? msg.time ?? msg.ts ?? msg.timestamp_epoch) ?? 0) < 1e12 ? 1000 : 1)
+        });
+        updateTicker();
+      }catch(e){
+        console.error('WS parse error:', e, raw);
+      }
+    }
+    function connectWS(){
+      ws = new WebSocket(WS_URL);
+      ws.onopen = ()=>{ retry=0; };
+      ws.onmessage = (ev)=> handleMessage(ev.data);
+      ws.onclose = ()=> setTimeout(connectWS, Math.min(1000*(++retry), 10000));
+      ws.onerror = ()=> ws.close();
+    }
+
+    // ===== 시작 =====
+    (async function(){
+      await loadDeviceList();
+      await backfillAllLatest();
+      connectWS();
+    })();
+  </script>
+</body>
+</html>

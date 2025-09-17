@@ -1,0 +1,272 @@
+/* =============================
+   SJIT UI Common Styles v0.1 (Light)
+   네임스페이스: .sj-* / [data-sj-*]
+   Tailwind과 공존 가능한 구체성
+   ============================= */
+:root {
+  --sj-bg: #ffffff;
+  --sj-bg-soft: #ffffff;
+  --sj-surface: #f8fafc;       /* 본문 배경 톤 */
+  --sj-border: #e5e7eb;        /* gray-200 */
+  --sj-text: #0f172a;          /* slate-900 */
+  --sj-muted: #64748b;         /* slate-500 */
+  --sj-accent: #1E88E5;        /* 브랜드 블루 */
+  --sj-accent-2: #22d3ee;      /* 시안 */
+}
+
+/* -------- Sidebar -------- */
+.sj-sidebar {
+  position: sticky;
+  top: 0; left: 0;
+  display: flex; flex-direction: column;
+  width: 240px; min-height: 100vh;
+  background: #ffffff;                 /* ← 그라데이션 제거, 화이트 */
+  color: var(--sj-text);
+  border-right: 1px solid var(--sj-border);
+}
+.sj-sidebar__logo {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 18px; font-weight: 700; letter-spacing: 0.2px;
+}
+.sj-sidebar__logo img { width: 28px; height: 28px; }
+
+.sj-sidebar__greet{
+  padding: 4px 18px 12px;
+  font-size: 12px;
+  color: var(--sj-muted);
+}
+.sj-sidebar__greet .name{
+  color: var(--sj-text);
+  font-weight: 600;
+}
+
+.sj-sidebar__search { padding: 0 16px 10px; }
+.sj-sidebar__search input {
+  width: 100%; height: 36px; border-radius: 10px;
+  padding: 0 12px; background: #ffffff; color: var(--sj-text);
+  border: 1px solid var(--sj-border);
+}
+.sj-sidebar__section { margin: 10px 8px 8px; }
+.sj-sidebar__title {
+  font-size: 11px; color: var(--sj-muted);
+  text-transform: uppercase; letter-spacing: 0.08em; padding: 8px 10px;
+}
+.sj-nav { display: grid; gap: 4px; padding: 0 8px 8px; }
+.sj-nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;            /* gap-2 */
+  padding: 0.5rem 0.75rem;/* px-3 py-2 */
+  border-radius: 0.375rem;/* rounded-md */
+  color: #374151;         /* text-gray-700 */
+  position: relative;     /* ::before 기준 */
+}
+.sj-nav a:hover { background: #f1f5f9; border-color: var(--sj-border); }
+.sj-nav a[aria-current="page"],
+.sj-nav a.is-active,
+.sj-nav a[aria-current="page"]{
+  background: #E9F2FF;          /* 연한 하늘색 배경 */
+  border-color: #BEDBFF;        /* 옅은 블루 테두리 */
+  color: #111827;               /* 좀 더 진한 텍스트 */
+}
+.sj-nav a[aria-current="page"]::before,
+.sj-nav a.is-active::before,
+.sj-nav a[aria-current="page"]::before{
+  content: "";
+  position: absolute;
+  left: -6px;                   /* 반쯤 밖으로 튀어나오게 */
+  top: 4px;
+  bottom: 4px;                  /* 위/아래 살짝 여백 */
+  width: 10px;                  /* 반원처럼 보이는 두께 */
+  background: var(--sj-accent); /* #1E88E5 */
+  border-radius: 9999px;        /* 완전 둥글게 */
+}
+
+/* 호버는 살짝만 */
+.sj-nav a:hover{
+  background: #F1F5F9;
+  border-color: var(--sj-border);
+}
+
+.sj-nav .sj-icon { width: 18px; height: 18px; opacity: .9; }
+
+/* -------- Tabs -------- */
+.sj-tabs { border-bottom: 1px solid var(--sj-border); display: flex; gap: 4px; }
+.sj-tab {
+  position: relative; display: inline-flex; align-items: center;
+  padding: 10px 12px; font-weight: 600; font-size: 14px;
+  color: var(--sj-muted); border-radius: 10px 10px 0 0;
+}
+.sj-tab[aria-selected="true"], .sj-tab.is-active { color: var(--sj-text); }
+.sj-tab[aria-selected="true"]::after, .sj-tab.is-active::after {
+  content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px;
+  height: 2px; background: linear-gradient(90deg, var(--sj-accent), var(--sj-accent-2));
+}
+.sj-tabpanels { padding: 12px 0; }
+.sj-tabpanel { display: none; }
+.sj-tabpanel.is-active { display: block; }
+
+/* -------- Rotator / Ticker -------- */
+.sj-rotator {
+  position: relative; overflow: hidden; height: 32px;
+  background: #ffffff;                   /* 라이트 */
+  border: 1px solid var(--sj-border);
+  border-radius: 10px; display: flex; align-items: center; padding: 0 12px;
+}
+.sj-rotator__item { position: absolute; inset: 0; display: flex; align-items: center; }
+.sj-rotator__text { white-space: nowrap; color: var(--sj-text); font-size: 13px; }
+.sj-rotator__badge {
+  font-size: 11px; margin-right: 8px; padding: 2px 6px; border-radius: 999px;
+  background: rgba(30,136,229,.10); color: var(--sj-accent); /* 라이트 톤 배지 */
+}
+.sj-fade-enter { opacity: 0; transform: translateY(8px); }
+.sj-fade-enter-active { transition: all .35s ease; opacity: 1; transform: translateY(0); }
+.sj-fade-exit { opacity: 1; transform: translateY(0); }
+.sj-fade-exit-active { transition: all .35s ease; opacity: 0; transform: translateY(-8px); }
+
+/* -------- Layout helpers -------- */
+.sj-shell { display: grid; grid-template-columns: 240px 1fr; }
+.sj-main { min-height: 100vh; background: var(--sj-surface); color: var(--sj-text); }
+.sj-header { background:#ffffff; color: var(--sj-text); display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--sj-border); }
+.sj-header .sj-title { font-size: 18px; font-weight: 700; }
+
+/* Small screens */
+@media (max-width: 1024px) {
+  .sj-shell { grid-template-columns: 1fr; }
+  .sj-sidebar { position: fixed; z-index: 50; transform: translateX(-100%); transition: transform .25s ease; }
+  .sj-sidebar.is-open { transform: translateX(0); }
+}
+
+/* === Sidebar active: 연한 파랑 배경 + 좌측 블루 보더 === */
+.sj-sidebar .sidebar-item.active{
+  background: rgba(30,136,229,.10);
+  border-left: 3px solid #1E88E5;
+}
+.sj-sidebar .sidebar-item:hover:not(.active){
+  background: rgba(30,136,229,.05);
+}
+
+/* (선택) 이전 스타일의 ::before 파란 바가 있다면 비활성화 */
+.sj-sidebar .sj-nav a.is-active::before,
+.sj-sidebar .sj-nav a[aria-current="page"]::before{
+  content: none;
+}
+
+/* === Sidebar Brand Header === */
+.sj-sidebar__brand{
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--sj-border);
+}
+
+.sj-brand-title{
+  font-weight: 800;
+  font-size: 20px;           /* 이미지 예시처럼 큼 */
+  color: var(--sj-accent);   /* 파란색 */
+  line-height: 1.2;
+}
+
+.sj-brand-sub{
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--sj-muted);    /* 회색 작은 글씨 */
+}
+
+/* 인사말은 브랜드 블록 안에 붙도록 패딩만 위쪽 살짝 */
+.sj-sidebar__brand .sj-sidebar__greet{
+  padding: 6px 0 0;
+  font-size: 12px;
+  color: #1f2937;            /* 조금 더 진한 회색 */
+}
+.sj-sidebar__brand .sj-sidebar__greet .name{
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* === Sidebar Brand + Logout button === */
+.sj-sidebar__brand{
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--sj-border);
+}
+
+.sj-brand-headline{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sj-brand-actions{
+  margin-left: auto;           /* 타이틀 오른쪽 끝으로 */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sj-btn-logout{
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid var(--sj-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;              /* slate-700 */
+  line-height: 1;
+  cursor: pointer;
+}
+.sj-btn-logout:hover{
+  background: #f8fafc;         /* 아주 연한 회색 */
+}
+
+.sj-brand-title{
+  font-weight: 800;
+  font-size: 20px;
+  color: var(--sj-accent);     /* 파란색 */
+  line-height: 1.2;
+}
+
+.sj-brand-sub{
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--sj-muted);
+}
+
+/* 브랜드 안 인사말(이메일) */
+.sj-sidebar__brand .sj-sidebar__greet{
+  padding: 6px 0 0;
+  font-size: 12px;
+  color: #1f2937;
+}
+.sj-sidebar__brand .sj-sidebar__greet .name{
+  font-weight: 600;
+  color: #1f2937;
+}
+
+/* ==== Brand actions (settings + logout) ==== */
+.sj-brand-actions{
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sj-btn{
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--sj-border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155; /* slate-700 */
+  line-height: 1;
+  cursor: pointer;
+}
+.sj-btn:hover{ background: #f8fafc; }
+
+.sj-btn-icon{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 기존 sj-btn-logout이 있다면 그대로 사용, 없으면 아래 사용 */
+.sj-btn-logout{ /* optional override */ }
+
+/* settings 전용(선택) */
+.sj-btn-settings i { opacity: .9; }
