@@ -180,6 +180,7 @@
                   <th class="px-3 py-2 text-left whitespace-nowrap">위치</th>
                   <th class="px-3 py-2 text-left whitespace-nowrap">펌웨어</th>
                   <th class="px-3 py-2 text-left whitespace-nowrap">태그 수</th>
+                  <th class="px-3 py-2 text-left whitespace-nowrap">펌웨어 업데이트</th>
                 </tr>
               </thead>
               <tbody id="table-body" class="divide-y divide-gray-100"></tbody>
@@ -287,6 +288,7 @@
     const WS_URL = "wss://fskxd58gc3.execute-api.ap-northeast-2.amazonaws.com/dev";
     const API_BASE = "https://v9dhc7n563.execute-api.ap-northeast-2.amazonaws.com/dev";
     const ALLOWED_API = "https://ujoxjrept3.execute-api.ap-northeast-2.amazonaws.com/dev/example-user-ble-tag/allowed";
+    const UPDATE_API = "https://ltewehlvgi.execute-api.ap-northeast-2.amazonaws.com/Update_Gateway"
 
     // ▼ 태그(디바이스) 컬렉션: 전광판용
     const TAG_COLLECTION = "calculated_locations";
@@ -432,6 +434,19 @@
             <td class="px-3 py-2 align-middle text-gray-700">${loc}</td>
             <td class="px-3 py-2 align-middle text-gray-700">${ver}</td>
             <td class="px-3 py-2 align-middle">${tagN}</td>
+            <td class="px-3 py-2 align-middle">
+              ${
+                isAdmin()
+                ? `
+                  <div class="flex items-center gap-2">
+                    <button class="px-2 py-1 border rounded bg-white hover:bg-gray-50 text-xs"
+                      data-act="gw-update" data-gw="${id}">업데이트</button>
+                    </button>
+                  </div>
+                `
+                : '—'
+              }
+      </td>
           </tr>
         `);
       }
@@ -687,6 +702,50 @@
       await loadGatewayList();
       await backfillAllGateways();
     });
+
+    $tbody.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-act="gw-update"]');
+      if (!btn) return;
+
+      if (sessionStorage.getItem('app_is_admin') !== '1') {
+        alert('관리자만 실행 가능합니다.');
+        return;
+      }
+
+      // 여기서 presigned manifest_url 을 직접 지정(또는 입력창)
+      const manifestUrl ="";
+
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = '신호 전송 중…';
+
+      try {
+        const res = await fetch(UPDATE_API, {
+          method: 'POST',
+          mode: 'cors',
+          headers: {
+            'Content-Type': 'text/plain;charset=UTF-8'
+          },
+          body: JSON.stringify({ manifest_url: manifestUrl })
+        });
+
+        // 응답을 읽을 수 있으려면 서버가 실제로 CORS 헤더를 POST 응답에도 넣어줘야 합니다.
+        const txt = await res.text();
+        let out = {}; try { out = JSON.parse(txt); } catch {}
+
+        if (!res.ok) throw new Error(out?.error || `HTTP ${res.status}`);
+        if (out?.ok !== true) {
+          console.warn('Unexpected response:', out);
+        }
+        alert(out?.message || '업데이트 신호 전송 완료!');
+      } catch (err) {
+        alert('실패: ' + (err?.message || err));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+
 
     
     function isAdmin(){ try { return sessionStorage.getItem('app_is_admin') === '1'; } catch { return false; } }
