@@ -1,31 +1,56 @@
-name: Example workflow for S3 Deploy
+name: Deploy static site to S3
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+
+permissions:
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.region }}
+
     steps:
-        - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
-        - name: Install dependencies
-          run: npm install
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
 
-        - name: Build
-          run: npm run build
+      - name: Install
+        run: npm ci || npm install
 
-        - name: Deploy
-          uses: reggionick/s3-deploy@v3
-          with:
-            folder: build
-            bucket: ${{ secrets.bucket }}
-            bucket-region: ${{ secrets.region }}
-            dist-id: ${{ secrets.id }}
-            invalidation: /
-            delete-removed: true
-            no-cache: true
-            private: true
+      - name: Build
+        run: npm run build
+
+      - name: Check build dir
+        run: |
+          test -d build || (echo "::error::build/ not found"; exit 3)
+          [ "$(ls -A build | wc -l)" -gt 0 ] || (echo "::error::build/ is empty"; exit 4)
+
+      - name: Who am I on AWS?
+        run: aws sts get-caller-identity
+
+      - name: Preflight S3/CF
+        run: |
+          aws s3 ls s3://${{ secrets.bucket }} --region ${{ secrets.region }}
+          if [ -n "${{ secrets.id }}" ]; then
+            aws cloudfront get-distribution --id ${{ secrets.id }} > /dev/null
+          fi
+
+      - name: Deploy
+        uses: reggionick/s3-deploy@v3
+        with:
+          folder: build
+          bucket: ${{ secrets.bucket }}
+          bucket-region: ${{ secrets.region }}
+          # CloudFront 안 쓰면 아래 2줄 제거
+          dist-id: ${{ secrets.id }}
+          invalidation: "/*"
+          delete-removed: true
+          no-cache: true
+          private: true
